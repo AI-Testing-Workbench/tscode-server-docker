@@ -169,3 +169,5 @@ testagent-cloud-docker.tar.gz
 tscode-server.tar
 tscode-server.tar.gz
 *.vsix
+!vsix/
+!vsix/*.vsix

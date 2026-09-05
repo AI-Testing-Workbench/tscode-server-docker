@@ -1,0 +1,130 @@
+name: Build TSCode Docker Image
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      server_run_id:
+        description: '指定服务端构建的 Actions run id（留空则使用 test-workbench-vscode main 分支最近一次成功构建）'
+        required: false
+        type: string
+
+concurrency:
+  group: tscode-docker-build
+  cancel-in-progress: true
+
+env:
+  # vscode-server-linux-x64.tar.gz 的来源仓库（其 release.yml 会产出同名 artifact）
+  SOURCE_REPO: AI-Testing-Workbench/test-workbench-vscode
+  SOURCE_WORKFLOW: release.yml
+  SOURCE_BRANCH: main
+  ARTIFACT_NAME: vscode-server-linux-x64
+  IMAGE_NAME: testagent/tscode-server
+
+jobs:
+  build:
+    name: 构建并导出 Docker 镜像
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 检查 TSCODE_ARTIFACT_PAT 权限
+        if: env.TSCODE_ARTIFACT_PAT == ''
+        run: |
+          echo "::error::缺少 TSCODE_ARTIFACT_PAT 配置。请在该仓库 Settings -> Secrets and variables -> Actions 中新增 TSCODE_ARTIFACT_PAT，其值需为对 ${SOURCE_REPO} 拥有 Actions: Read 权限的 Personal Access Token（public repo 拉取 artifact 也需要鉴权）。"
+          exit 1
+        env:
+          TSCODE_ARTIFACT_PAT: ${{ secrets.TSCODE_ARTIFACT_PAT }}
+
+      - name: 定位服务端构建 run
+        id: server-build
+        env:
+          TSCODE_ARTIFACT_PAT: ${{ secrets.TSCODE_ARTIFACT_PAT }}
+          SERVER_RUN_ID: ${{ inputs.server_run_id }}
+        run: |
+          if [ -n "${SERVER_RUN_ID}" ]; then
+            # 由上游流水线调度：直接使用其传入的 run id，并读取对应 commit
+            run_id="${SERVER_RUN_ID}"
+            result=$(curl --fail --silent --show-error \
+              -H "Authorization: Bearer ${TSCODE_ARTIFACT_PAT}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${SOURCE_REPO}/actions/runs/${run_id}")
+            head_sha=$(printf '%s' "$result" | jq -r '.head_sha')
+          else
+            # push 触发：查询上游最近一次成功的服务端构建
+            result=$(curl --fail --silent --show-error \
+              -H "Authorization: Bearer ${TSCODE_ARTIFACT_PAT}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${SOURCE_REPO}/actions/runs?workflow_id=${SOURCE_WORKFLOW}&branch=${SOURCE_BRANCH}&event=push&status=success&per_page=1")
+            run_id=$(printf '%s' "$result" | jq -r '.workflow_runs[0].id')
+            head_sha=$(printf '%s' "$result" | jq -r '.workflow_runs[0].head_sha')
+            if [ "$run_id" = "null" ] || [ -z "$run_id" ]; then
+              echo "::error::在 ${SOURCE_REPO} 的 ${SOURCE_BRANCH} 分支上未找到 ${SOURCE_WORKFLOW} 的成功构建记录。"
+              exit 1
+            fi
+          fi
+          echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
+          echo "定位到服务端构建 run: ${run_id} (commit ${head_sha})"
+
+      - name: 下载 vscode-server-linux-x64 artifact
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          github_token: ${{ secrets.TSCODE_ARTIFACT_PAT }}
+          repo: ${{ env.SOURCE_REPO }}
+          run_id: ${{ steps.server-build.outputs.run_id }}
+          name: ${{ env.ARTIFACT_NAME }}
+          path: server-artifact
+          if_no_artifact_found: fail
+
+      - name: 准备 docker build context
+        run: |
+          mkdir -p context
+          cp Dockerfile start.sh context/
+          mv server-artifact/vscode-server-linux-x64.tar.gz context/
+          # 若仓库内 vsix/ 目录下存在插件，则一并打进镜像
+          if ls vsix/*.vsix >/dev/null 2>&1; then
+            cp vsix/*.vsix context/
+          fi
+          ls -lh context/
+
+      - name: 构建镜像
+        run: |
+          docker build \
+            --label "org.opencontainers.image.source=${SOURCE_REPO}" \
+            --label "org.opencontainers.image.revision=${SERVER_SHA}" \
+            -t "${IMAGE_NAME}:latest" \
+            -t "${IMAGE_NAME}:server-${SERVER_SHA}" \
+            context/
+        env:
+          SERVER_SHA: ${{ steps.server-build.outputs.head_sha }}
+
+      - name: 导出镜像为 tscode-server.tar.gz
+        run: |
+          docker save "${IMAGE_NAME}:latest" | gzip > tscode-server.tar.gz
+          ls -lh tscode-server.tar.gz
+
+      - name: 上传镜像产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: tscode-server-image
+          path: tscode-server.tar.gz
+          retention-days: 7
+
+      - name: 输出构建信息
+        run: |
+          echo "## TSCode Docker 镜像构建完成" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 服务端来源仓库: ${SOURCE_REPO}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 服务端构建 run: ${SERVER_RUN_ID} (commit ${SERVER_SHA})" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 产物: tscode-server-image (tscode-server.tar.gz)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "下载后使用 \`docker load -i tscode-server.tar.gz\` 导入镜像即可。" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          SERVER_RUN_ID: ${{ steps.server-build.outputs.run_id }}
+          SERVER_SHA: ${{ steps.server-build.outputs.head_sha }}

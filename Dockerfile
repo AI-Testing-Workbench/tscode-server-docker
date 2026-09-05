@@ -6,9 +6,9 @@ ARG NODE_VERSION=24.20.0
 ARG BUN_VERSION=1.4.0
 
 # 需要与 SSH 插件保持一致
-ARG TESTAGENT_SERVER_COMMIT=tscode
-ARG TESTAGENT_SERVER_APP_NAME=tscode-server
-ARG TESTAGENT_SERVER_DATA_DIR=/root/.tscode-server
+ARG TSCODE_SERVER_COMMIT=tscode
+ARG TSCODE_SERVER_APP_NAME=tscode-server
+ARG TSCODE_SERVER_DATA_DIR=/root/.tscode-server
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -82,21 +82,21 @@ RUN touch /etc/tscode-cloud-mode
 # 从本地文件安装 tscode
 RUN --mount=type=bind,source=vscode-server-linux-x64.tar.gz,target=/tmp/vscode-server-linux-x64.tar.gz,readonly \
     set -eux; \
-    mkdir -p "${TESTAGENT_SERVER_DATA_DIR}/bin/${TESTAGENT_SERVER_COMMIT}"; \
+    mkdir -p "${TSCODE_SERVER_DATA_DIR}/bin/${TSCODE_SERVER_COMMIT}"; \
     tar --extract --file /tmp/vscode-server-linux-x64.tar.gz --gzip \
-        --directory "${TESTAGENT_SERVER_DATA_DIR}/bin/${TESTAGENT_SERVER_COMMIT}" \
+        --directory "${TSCODE_SERVER_DATA_DIR}/bin/${TSCODE_SERVER_COMMIT}" \
         --strip-components=1; \
-    test -x "${TESTAGENT_SERVER_DATA_DIR}/bin/${TESTAGENT_SERVER_COMMIT}/bin/${TESTAGENT_SERVER_APP_NAME}"; \
-    test -f "${TESTAGENT_SERVER_DATA_DIR}/bin/${TESTAGENT_SERVER_COMMIT}/product.json"
+    test -x "${TSCODE_SERVER_DATA_DIR}/bin/${TSCODE_SERVER_COMMIT}/bin/${TSCODE_SERVER_APP_NAME}"; \
+    test -f "${TSCODE_SERVER_DATA_DIR}/bin/${TSCODE_SERVER_COMMIT}/product.json"
 
 # 从本地文件安装额外的 tscode 插件
 RUN --mount=type=bind,source=.,target=/tmp/build-context,readonly \
     set -eux; \
-    mkdir -p "${TESTAGENT_SERVER_DATA_DIR}/bin/${TESTAGENT_SERVER_COMMIT}/extensions"; \
+    mkdir -p "${TSCODE_SERVER_DATA_DIR}/bin/${TSCODE_SERVER_COMMIT}/extensions"; \
     find /tmp/build-context -maxdepth 1 -type f -name '*.vsix' -print0 \
         | xargs -0 -r -n 1 \
-            "${TESTAGENT_SERVER_DATA_DIR}/bin/${TESTAGENT_SERVER_COMMIT}/bin/${TESTAGENT_SERVER_APP_NAME}" \
-            --extensions-dir "${TESTAGENT_SERVER_DATA_DIR}/bin/${TESTAGENT_SERVER_COMMIT}/extensions" \
+            "${TSCODE_SERVER_DATA_DIR}/bin/${TSCODE_SERVER_COMMIT}/bin/${TSCODE_SERVER_APP_NAME}" \
+            --extensions-dir "${TSCODE_SERVER_DATA_DIR}/bin/${TSCODE_SERVER_COMMIT}/extensions" \
             --install-extension
 
 # 配置 SSH
