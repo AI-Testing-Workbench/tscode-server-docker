@@ -21,15 +21,15 @@
 
 **① 本仓库（tscode-server-docker）`Settings -> Secrets and variables -> Actions`：**
 
-| 名称 | 说明 |
-| --- | --- |
-| `TSCODE_ARTIFACT_PAT` | 用于跨仓库读取 Actions artifact 的 PAT，需对 `AI-Testing-Workbench/test-workbench-vscode` 拥有 **Actions: Read** 权限（public 仓库拉取 artifact 同样需要鉴权） |
+| 名称                    | 说明                                                                                                                                                                  |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TSCODE_ARTIFACT_PAT` | 用于跨仓库读取 Actions artifact 的 PAT，需对`AI-Testing-Workbench/test-workbench-vscode` 拥有 **Actions: Read** 权限（public 仓库拉取 artifact 同样需要鉴权） |
 
 **② 上游仓库（test-workbench-vscode）`Settings -> Secrets and variables -> Actions`：**
 
-| 名称 | 说明 |
-| --- | --- |
-| `DOCKER_REPO_PAT` | 用于调度本流水线的 PAT，需对 `AI-Testing-Workbench/tscode-server-docker` 拥有 **Workflow** 写入权限。未配置时上游不会调度本仓库（release 流水线不受影响，仅跳过调度步骤） |
+| 名称                | 说明                                                                                                                                                                             |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DOCKER_REPO_PAT` | 用于调度本流水线的 PAT，需对`AI-Testing-Workbench/tscode-server-docker` 拥有 **Workflow** 写入权限。未配置时上游不会调度本仓库（release 流水线不受影响，仅跳过调度步骤） |
 
 ### 联动调度
 
@@ -55,3 +55,7 @@ docker build -t testagent/tscode-server:latest .
 docker save -o tscode-server.tar testagent/tscode-server:latest
 $in="tscode-server.tar"; $out="$in.gz"; $src=[IO.File]::OpenRead($in); $dst=[IO.File]::Create($out); $gz=[IO.Compression.GZipStream]::new($dst,[IO.Compression.CompressionMode]::Compress); $src.CopyTo($gz); $gz.Dispose(); $dst.Dispose(); $src.Dispose()
 ```
+
+
+## 注意事项
+在docker作为容器引擎（行外全流程测试），需要在通过sandbox创建好容器后，需要在宿主机执行下 connect-fix.sh 脚本。k8s作为背后引擎（生产环境）则不需要
