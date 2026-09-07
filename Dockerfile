@@ -99,6 +99,19 @@ RUN --mount=type=bind,source=.,target=/tmp/build-context,readonly \
             --extensions-dir "${TSCODE_SERVER_DATA_DIR}/bin/${TSCODE_SERVER_COMMIT}/extensions" \
             --install-extension
 
+# 预装 ripgrep（静态 musl 二进制），避免 testagent 运行期联网下载
+# 安装到 /usr/local/bin 供 PATH 查找，同时预置 opencode 缓存目录兜底
+RUN --mount=type=bind,source=builtin,target=/tmp/builtin,readonly \
+    set -eux; \
+    mkdir -p /tmp/rg-extract; \
+    tar --extract --file /tmp/builtin/ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz --gzip \
+        --directory /tmp/rg-extract; \
+    install -m 0755 /tmp/rg-extract/ripgrep-15.1.0-x86_64-unknown-linux-musl/rg /usr/local/bin/rg; \
+    install -d -m 0755 /root/.cache/opencode/bin; \
+    install -m 0755 /tmp/rg-extract/ripgrep-15.1.0-x86_64-unknown-linux-musl/rg /root/.cache/opencode/bin/rg; \
+    rm -rf /tmp/rg-extract; \
+    rg --version
+
 # 配置 SSH
 RUN mkdir -p /run/sshd \
     && sed -i -E '/^[[:space:]]*#?[[:space:]]*(AuthenticationMethods|PasswordAuthentication|PermitRootLogin|PermitEmptyPasswords|PubkeyAuthentication|KbdInteractiveAuthentication|ChallengeResponseAuthentication|HostbasedAuthentication|GSSAPIAuthentication|UsePAM|AllowTcpForwarding|AllowStreamLocalForwarding)[[:space:]]+/d' /etc/ssh/sshd_config \

@@ -91,6 +91,8 @@ jobs:
           if ls vsix/*.vsix >/dev/null 2>&1; then
             cp vsix/*.vsix context/
           fi
+          # builtin/ 下的离线产物（如 ripgrep）随镜像打包，避免运行期联网下载
+          cp -r builtin context/
           ls -lh context/
 
       - name: 构建镜像

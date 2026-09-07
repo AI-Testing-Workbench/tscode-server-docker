@@ -43,7 +43,8 @@
 
 1. 在根目录下放置名为 `vscode-server-linux-x64.tar.gz` 的 TSCode 服务端压缩包
 2. (可选) 在根目录下直接放置额外需要打包的 `vsix` 插件
-3. 运行如下命令进行构建
+3. (可选) 如需离线内置 ripgrep，确保 `builtin/ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz` 存在（Dockerfile 会将其解包安装，避免容器运行期联网下载）
+4. 运行如下命令进行构建
 
 ```shell
 docker build -t testagent/tscode-server:latest .
