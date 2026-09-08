@@ -10,7 +10,7 @@ ssh-keygen -A
 # --- Start ---
 
 echo  "环境变量测试"
-printenv | grep '^TESTAGENT'
+printenv | grep '^TESTAGENT' || true
 
 # --- End ---
 
