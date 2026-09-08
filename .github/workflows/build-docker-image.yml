@@ -85,7 +85,7 @@ jobs:
       - name: 准备 docker build context
         run: |
           mkdir -p context
-          cp Dockerfile start.sh context/
+          cp Dockerfile start.sh chrome.sh context/
           mv server-artifact/vscode-server-linux-x64.tar.gz context/
           # 若仓库内 vsix/ 目录下存在插件，则一并打进镜像
           if ls vsix/*.vsix >/dev/null 2>&1; then

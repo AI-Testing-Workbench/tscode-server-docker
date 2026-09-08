@@ -58,5 +58,24 @@ $in="tscode-server.tar"; $out="$in.gz"; $src=[IO.File]::OpenRead($in); $dst=[IO.
 ```
 
 
+## OpenSandbox Chrome 沙盒模式
+
+镜像内置 Google Chrome 与 TigerVNC，供 OpenSandbox 提供带浏览器的沙盒（基座仍为 Ubuntu 24.04，未回退 Debian）。
+
+- **Chrome**：官方 deb 安装的真 Chrome（Ubuntu apt 无 chromium 二进制包，仅有指向 snap 的过渡包），远程调试端口 `9222`
+- **VNC**：`Xtigervnc :1`，无密码，端口 `5901`
+- 启动脚本：`/chrome.sh`（对应仓库根目录 `chrome.sh`）
+
+默认**不启动** Chrome。需要浏览器时，在创建容器/Sandbox 时注入环境变量 `TESTAGENT_ENABLE_CHROME=1`（`true`/`yes`/`on` 亦可），`/root/.start.sh` 检测到后会在后台拉起 VNC 与 Chrome，sshd 照常作为主进程运行；启动日志见容器内 `/tmp/vnc.log`、`/tmp/chrome.log`。
+
+接入 OpenSandbox 时参照 `examples/chrome`，通过 execd 端点访问：
+
+```text
+VNC:      <endpoint>/proxy/5901
+DevTools: <endpoint>/proxy/9222/json
+```
+
+注意：`dl.google.com` 需可访问（GitHub Actions 正常，国内手动构建若超时可自备 Google Chrome deb 镜像）。
+
 ## 注意事项
 在docker作为容器引擎（行外全流程测试），需要在通过sandbox创建好容器后，需要在宿主机执行下 connect-fix.sh 脚本。k8s作为背后引擎（生产环境）则不需要
