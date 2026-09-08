@@ -128,7 +128,9 @@ WORKDIR /app
 # 配置启动脚本
 COPY start.sh /root/.start.sh
 
-RUN chmod 0755 /root/.start.sh
+# 修改启动脚本换行符为 Linux LF
+RUN sed -i 's/\r$//' /root/.start.sh \
+    && chmod 0755 /root/.start.sh
 
 EXPOSE 22
 
