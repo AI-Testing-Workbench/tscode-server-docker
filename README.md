@@ -64,16 +64,23 @@ $in="tscode-server.tar"; $out="$in.gz"; $src=[IO.File]::OpenRead($in); $dst=[IO.
 
 - **Chrome**：官方 deb 安装的真 Chrome（Ubuntu apt 无 chromium 二进制包，仅有指向 snap 的过渡包），远程调试端口 `9222`
 - **VNC**：`Xtigervnc :1`，无密码，端口 `5901`
+- **noVNC**：`websockify --web=/usr/share/novnc 6080 localhost:5901`，端口 `6080`，供宿主机浏览器实时查看容器内 Chrome
 - 启动脚本：`/chrome.sh`（对应仓库根目录 `chrome.sh`）
 
-默认**不启动** Chrome。需要浏览器时，在创建容器/Sandbox 时注入环境变量 `TESTAGENT_ENABLE_CHROME=1`（`true`/`yes`/`on` 亦可），`/root/.start.sh` 检测到后会在后台拉起 VNC 与 Chrome，sshd 照常作为主进程运行；启动日志见容器内 `/tmp/vnc.log`、`/tmp/chrome.log`。
+默认**不启动** Chrome。需要浏览器时，在创建容器/Sandbox 时注入环境变量 `TESTAGENT_ENABLE_CHROME=1`（`true`/`yes`/`on` 亦可），`/root/.start.sh` 检测到后会在后台拉起 VNC 与 Chrome，sshd 照常作为主进程运行；启动日志见容器内 `/tmp/vnc.log`、`/tmp/chrome.log`、`/tmp/novnc.log`。
 
-接入 OpenSandbox 时参照 `examples/chrome`，通过 execd 端点访问：
+接入 OpenSandbox 时参照 `examples/chrome`、`examples/desktop`，通过 execd 端点访问：
 
 ```text
+SSH:      <endpoint>/proxy/22
 VNC:      <endpoint>/proxy/5901
 DevTools: <endpoint>/proxy/9222/json
+noVNC:    <endpoint>/proxy/6080/vnc.html?host=<execd_host>&port=<execd_port>&path=proxy/6080
 ```
+
+例如 execd 端点为 `127.0.0.1:50365`，宿主机浏览器打开：
+`http://127.0.0.1:50365/proxy/6080/vnc.html?host=127.0.0.1&port=50365&path=proxy/6080`
+即可实时看到容器内 Chrome 的自动化执行画面。
 
 注意：`dl.google.com` 需可访问（GitHub Actions 正常，国内手动构建若超时可自备 Google Chrome deb 镜像）。
 

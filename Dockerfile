@@ -15,7 +15,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 # 验证编译环境位于 X64 环境下
 RUN dpkg --print-architecture | grep -qx amd64
 
-# 安装基础环境（含 OpenSandbox Chrome/VNC 沙盒所需 tigervnc/x11-utils/xdg-utils）
+# 安装基础环境（含 OpenSandbox Chrome/VNC 沙盒所需 tigervnc/novnc/websockify/x11-utils/xdg-utils）
 RUN export DEBIAN_FRONTEND="${DEBIAN_FRONTEND}" \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -32,6 +32,7 @@ RUN export DEBIAN_FRONTEND="${DEBIAN_FRONTEND}" \
         less \
         libstdc++6 \
         ninja-build \
+        novnc \
         openjdk-8-jdk \
         openssh-server \
         passwd \
@@ -50,6 +51,7 @@ RUN export DEBIAN_FRONTEND="${DEBIAN_FRONTEND}" \
         util-linux \
         vim-tiny \
         wget \
+        websockify \
         xdg-utils \
         x11-utils \
         xz-utils \
