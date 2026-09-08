@@ -15,7 +15,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 # 验证编译环境位于 X64 环境下
 RUN dpkg --print-architecture | grep -qx amd64
 
-# 安装基础环境
+# 安装基础环境（含 OpenSandbox Chrome/VNC 沙盒所需 tigervnc/x11-utils/xdg-utils）
 RUN export DEBIAN_FRONTEND="${DEBIAN_FRONTEND}" \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -45,10 +45,13 @@ RUN export DEBIAN_FRONTEND="${DEBIAN_FRONTEND}" \
         rsync \
         sqlite3 \
         tar \
+        tigervnc-standalone-server \
         unzip \
         util-linux \
         vim-tiny \
         wget \
+        xdg-utils \
+        x11-utils \
         xz-utils \
         zip \
     && rm -f /etc/ssh/ssh_host_* \
@@ -112,6 +115,19 @@ RUN --mount=type=bind,source=builtin,target=/tmp/builtin,readonly \
     rm -rf /tmp/rg-extract; \
     rg --version
 
+# 安装 Google Chrome（Ubuntu 24.04 仓库无 chromium 二进制包，仅有指向 snap 的过渡包，
+# 故改用官方 deb 安装真 Chrome，供 OpenSandbox Chrome 沙盒使用）
+RUN set -eux; \
+    curl --fail --silent --show-error --location --retry 3 \
+        --output /tmp/google-chrome-stable_current_amd64.deb \
+        https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb; \
+    export DEBIAN_FRONTEND="${DEBIAN_FRONTEND}"; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends /tmp/google-chrome-stable_current_amd64.deb; \
+    rm -f /tmp/google-chrome-stable_current_amd64.deb; \
+    rm -rf /var/lib/apt/lists/*; \
+    google-chrome --version
+
 # 配置 SSH
 RUN mkdir -p /run/sshd \
     && sed -i -E '/^[[:space:]]*#?[[:space:]]*(AuthenticationMethods|PasswordAuthentication|PermitRootLogin|PermitEmptyPasswords|PubkeyAuthentication|KbdInteractiveAuthentication|ChallengeResponseAuthentication|HostbasedAuthentication|GSSAPIAuthentication|UsePAM|AllowTcpForwarding|AllowStreamLocalForwarding)[[:space:]]+/d' /etc/ssh/sshd_config \
@@ -125,12 +141,19 @@ RUN install -d -m 0777 /app \
 
 WORKDIR /app
 
+# 预创建 X11 socket 目录（VNC/Chrome 沙盒使用）
+RUN mkdir -p /tmp/.X11-unix \
+    && chmod 1777 /tmp/.X11-unix
+
 # 配置启动脚本
 COPY start.sh /root/.start.sh
+COPY chrome.sh /chrome.sh
 
-RUN chmod 0755 /root/.start.sh
+RUN chmod 0755 /root/.start.sh \
+    && chmod 0755 /chrome.sh
 
-EXPOSE 22
+# Chrome 沙盒模式下暴露 VNC(5901) 与 DevTools(9222) 端口
+EXPOSE 22 5901 9222
 
 ENTRYPOINT ["/root/.start.sh"]
 CMD ["/usr/sbin/sshd", "-D", "-e"]
