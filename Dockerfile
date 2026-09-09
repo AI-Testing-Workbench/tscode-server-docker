@@ -153,6 +153,7 @@ COPY chrome.sh /chrome.sh
 
 # 修改启动脚本换行符为 Linux LF
 RUN sed -i 's/\r$//' /root/.start.sh \
+    && sed -i 's/\r$//' /chrome.sh \
     && chmod 0755 /root/.start.sh \
     && chmod 0755 /chrome.sh
 
