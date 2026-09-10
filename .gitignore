@@ -171,3 +171,6 @@ tscode-server.tar.gz
 *.vsix
 !vsix/
 !vsix/*.vsix
+
+.kilo/
+work/
