@@ -149,13 +149,13 @@ RUN mkdir -p /tmp/.X11-unix \
 
 # 配置启动脚本
 COPY start.sh /root/.start.sh
-COPY chrome.sh /chrome.sh
+COPY chrome.sh /root/.chrome.sh
 
 # 修改启动脚本换行符为 Linux LF
 RUN sed -i 's/\r$//' /root/.start.sh \
-    && sed -i 's/\r$//' /chrome.sh \
+    && sed -i 's/\r$//' /root/.chrome.sh \
     && chmod 0755 /root/.start.sh \
-    && chmod 0755 /chrome.sh
+    && chmod 0755 /root/.chrome.sh
 
 # Chrome 沙盒模式下暴露 VNC(5901) 与 DevTools(9222) 端口
 EXPOSE 22 5901 9222

@@ -10,7 +10,7 @@ ssh-keygen -A
 # --- Start ---
 
 echo  "环境变量测试"
-printenv | grep '^TESTAGENT' || true
+printenv | grep '^TESTAGENT'
 
 # --- End ---
 
@@ -35,7 +35,7 @@ start_browser() {
         return 0
     fi
 
-    DISPLAY=:1 /chrome.sh >/tmp/chrome.log 2>&1 &
+    DISPLAY=:1 /root/.chrome.sh >/tmp/chrome.log 2>&1 &
 
     # noVNC/websockify：把 VNC(5901) 转成 HTTP/WebSocket，宿主机浏览器经
     # execd /proxy/6080 打开 vnc.html 即可实时查看容器内 Chrome。
