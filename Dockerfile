@@ -126,6 +126,11 @@ RUN --mount=type=bind,source=.,target=/tmp/build-context,readonly \
             --extensions-dir "${TSCODE_SERVER_DATA_DIR}/bin/${TSCODE_SERVER_COMMIT}/extensions" \
             --install-extension
 
+# 为 tscode 扩展中的原生二进制增加执行权限
+RUN chmod 0755 \
+    "${TSCODE_SERVER_DATA_DIR}/bin/${TSCODE_SERVER_COMMIT}/extensions/test-tech.testagent/bin/testagent" \
+    "${TSCODE_SERVER_DATA_DIR}/bin/${TSCODE_SERVER_COMMIT}/extensions/test-tech.testagent/bin/testflow"
+
 # 预装 ripgrep（静态 musl 二进制），避免 testagent 运行期联网下载
 # 安装到 /usr/local/bin 供 PATH 查找，同时预置 opencode 缓存目录兜底
 RUN --mount=type=bind,source=builtin,target=/tmp/builtin,readonly \
