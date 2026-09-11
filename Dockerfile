@@ -2,7 +2,6 @@
 
 FROM ubuntu:24.04
 
-ARG NODE_VERSION=24.20.0
 ARG BUN_VERSION=1.4.0
 
 # 需要与 SSH 插件保持一致
@@ -15,15 +14,33 @@ ARG DEBIAN_FRONTEND=noninteractive
 # 验证编译环境位于 X64 环境下
 RUN dpkg --print-architecture | grep -qx amd64
 
-# 安装基础环境（含 OpenSandbox Chrome/VNC 沙盒所需 tigervnc/novnc/websockify/x11-utils/xdg-utils）
+# 先固定安装 Node.js 24.20.0，确保后续 novnc 依赖使用 NodeSource 的 nodejs 包
+RUN set -eux; \
+    export DEBIAN_FRONTEND="${DEBIAN_FRONTEND}"; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        gnupg; \
+    curl --fail --silent --show-error --location --retry 3 \
+        --output /tmp/nodesource-setup.sh \
+        https://deb.nodesource.com/setup_24.x; \
+    bash /tmp/nodesource-setup.sh; \
+    rm -f /tmp/nodesource-setup.sh; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends nodejs=24.20.0-1nodesource1; \
+    test "$(node --version)" = v24.20.0; \
+    test "$(/usr/bin/node --version)" = v24.20.0; \
+    npm --version; \
+    rm -rf /var/lib/apt/lists/*
+
+# 安装基础环境
 RUN export DEBIAN_FRONTEND="${DEBIAN_FRONTEND}" \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
         bash \
         build-essential \
-        ca-certificates \
         cmake \
-        curl \
         git \
         gzip \
         htop \
@@ -32,8 +49,6 @@ RUN export DEBIAN_FRONTEND="${DEBIAN_FRONTEND}" \
         less \
         libstdc++6 \
         ninja-build \
-        novnc \
-        openjdk-8-jdk \
         openssh-server \
         passwd \
         pkg-config \
@@ -46,28 +61,21 @@ RUN export DEBIAN_FRONTEND="${DEBIAN_FRONTEND}" \
         rsync \
         sqlite3 \
         tar \
-        tigervnc-standalone-server \
         unzip \
         util-linux \
         vim-tiny \
         wget \
-        websockify \
-        xdg-utils \
-        x11-utils \
         xz-utils \
         zip \
     && rm -f /etc/ssh/ssh_host_* \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装 Node
-RUN set -eux; \
-    curl --fail --silent --show-error --location --retry 3 \
-        --output /tmp/node-v${NODE_VERSION}-linux-x64.tar.xz \
-        "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz"; \
-    tar --extract --file /tmp/node-v${NODE_VERSION}-linux-x64.tar.xz --xz --directory /usr/local --strip-components=1; \
-    rm -f /tmp/node-v${NODE_VERSION}-linux-x64.tar.xz; \
-    node --version; \
-    npm --version
+# 安装 Java
+RUN export DEBIAN_FRONTEND="${DEBIAN_FRONTEND}" \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        openjdk-8-jdk \
+    && rm -rf /var/lib/apt/lists/*
 
 # 安装 Bun
 RUN set -eux; \
@@ -80,6 +88,20 @@ RUN set -eux; \
     install -m 0755 /tmp/bun-install/bin/bun /usr/local/bin/bun; \
     rm -rf /tmp/bun-install /tmp/bun-install.sh; \
     bun --version
+
+# 安装 OpenSandbox Chrome/VNC 沙盒依赖。
+# novnc 依赖 nodejs，此时使用前面已安装的 NodeSource 包，不会引入 Ubuntu Node 18。
+RUN export DEBIAN_FRONTEND="${DEBIAN_FRONTEND}" \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        novnc \
+        tigervnc-standalone-server \
+        websockify \
+        xdg-utils \
+        x11-utils \
+    && test "$(node --version)" = v24.20.0 \
+    && test "$(/usr/bin/node --version)" = v24.20.0 \
+    && rm -rf /var/lib/apt/lists/*
 
 # 声明当前处于云端模式
 RUN touch /etc/tscode-cloud-mode
