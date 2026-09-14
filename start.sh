@@ -561,21 +561,19 @@ def _git_config_value(key):
     return value if _safe_identity_value(value) else ""
 
 
-def _apply_initial_identity():
-    if HELPER_PHASE != "init":
-        return True
-    try:
-        extra = _read_extra()
-    except OSError:
-        return True
-    username = extra.get("git_username", "")
-    email = extra.get("git_email", "")
-    if not username:
-        return True
+def _write_git_identity(username, email):
+    if (
+        not isinstance(username, str)
+        or not isinstance(email, str)
+        or not username
+        or not _safe_identity_value(username)
+        or not _safe_identity_value(email)
+    ):
+        return False
     try:
         for key, value in (("user.name", username), ("user.email", email)):
             completed = subprocess.run(
-                ["git", "config", "--global", key, value],
+                ["git", "config", "--global", "--replace-all", key, value],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=10,
@@ -585,7 +583,32 @@ def _apply_initial_identity():
                 return False
     except (OSError, subprocess.SubprocessError):
         return False
-    return True
+    return _git_config_value("user.name") == username and (
+        not email or _git_config_value("user.email") == email
+    )
+
+
+def _apply_local_identity(stored=None):
+    try:
+        extra = _read_extra()
+    except OSError:
+        extra = {}
+    stored = stored if isinstance(stored, dict) else {}
+    username = extra.get("git_username") or stored.get("username", "")
+    email = (
+        extra["git_email"]
+        if "git_email" in extra
+        else _git_config_value("user.email")
+    )
+    if not username:
+        return True
+    return _write_git_identity(username, email)
+
+
+def _apply_initial_identity(stored=None):
+    if HELPER_PHASE != "init":
+        return True
+    return _apply_local_identity(stored)
 
 
 def _output_credential(request, stored):
@@ -761,7 +784,9 @@ def _save_api_credential(request, credential):
     ok, _ = _credential_store("store", local_request)
     if not ok:
         return False
-    return _write_extra(credential)
+    if not _write_extra(credential):
+        return False
+    return _write_git_identity(credential["git_username"], credential["git_email"])
 
 
 def _handle_init_get(request):
@@ -771,7 +796,7 @@ def _handle_init_get(request):
         _error("local")
         return 1
     if stored.get("password"):
-        if not _apply_initial_identity():
+        if not _apply_initial_identity(stored):
             _error("local")
             return 1
         if _output_credential(request, stored):
@@ -812,7 +837,7 @@ def _handle_init_get(request):
                 _error("local")
                 return 1
             local_ok, stored = _read_local_credential(request)
-            if not local_ok or not _apply_initial_identity() or not _output_credential(request, stored):
+            if not local_ok or not _apply_initial_identity(stored) or not _output_credential(request, stored):
                 _best_effort_report("failed_container")
                 _error("local")
                 return 1
@@ -860,6 +885,8 @@ def _handle_runtime_get(request):
     # Runtime get prefers local storage, then performs one API fallback before Git prompts.
     local_ok, stored = _read_local_credential(request)
     if local_ok and stored.get("password"):
+        if not _apply_local_identity(stored):
+            _error("local")
         if _output_credential(request, stored):
             return 0
         _progress("runtime local credential output failed; trying API")
@@ -925,6 +952,9 @@ def _handle_store(request):
     if not _write_extra(
         {"type": "password", "git_username": username, "git_email": email}
     ):
+        _error("local")
+        return 1
+    if username and not _write_git_identity(username, email):
         _error("local")
         return 1
     if HELPER_PHASE != "runtime":
