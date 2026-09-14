@@ -740,6 +740,18 @@ def _credential_from_response(body):
     }
 
 
+def _runtime_api_credential():
+    response_status, body = _request("GET", "credential", read_body=True)
+    if response_status != 200:
+        _progress("runtime API credential unavailable; returning control to Git")
+        return None
+    credential = _credential_from_response(body)
+    if credential is None:
+        _progress("runtime API credential invalid; returning control to Git")
+        return None
+    return credential
+
+
 def _save_api_credential(request, credential):
     local_request = dict(request)
     local_request["username"] = credential["git_username"]
@@ -845,15 +857,24 @@ def _handle_init_get(request):
 
 
 def _handle_runtime_get(request):
-    # Runtime get must never re-enter the initialization API polling state machine.
+    # Runtime get prefers local storage, then performs one API fallback before Git prompts.
     local_ok, stored = _read_local_credential(request)
-    if not local_ok:
-        _error("local")
-        return 1
-    if not stored.get("password"):
-        _progress("runtime credential miss; returning control to Git")
+    if local_ok and stored.get("password"):
+        if _output_credential(request, stored):
+            return 0
+        _progress("runtime local credential output failed; trying API")
+    else:
+        _progress("runtime local credential unavailable; trying API")
+
+    credential = _runtime_api_credential()
+    if credential is None:
         return 0
-    if _output_credential(request, stored):
+    if not _save_api_credential(request, credential):
+        _progress("runtime API credential local save failed; using API credential")
+    if _output_credential(
+        request,
+        {"username": credential["git_username"], "password": credential["git_password"]},
+    ):
         return 0
     _error("local")
     return 1
@@ -888,6 +909,12 @@ def _handle_store(request):
     else:
         local_request.pop("username", None)
     local_request["password"] = password
+    local_ok, stored = _read_local_credential(request)
+    local_credential_unchanged = (
+        local_ok
+        and stored.get("password") == password
+        and (not username or stored.get("username", "") == username)
+    )
     if not _prepare_credential_file(True):
         _error("local")
         return 1
@@ -901,6 +928,9 @@ def _handle_store(request):
         _error("local")
         return 1
     if HELPER_PHASE != "runtime":
+        return 0
+    if local_credential_unchanged:
+        _progress("runtime credential already stored; upload prompt skipped")
         return 0
 
     # 运行期不在 credential helper 内读取终端；用户需要显式执行上传命令。
