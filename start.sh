@@ -1479,15 +1479,6 @@ else
     echo "[start] Git 状态 initialized 已上报"
 fi
 
-# initialized 已确认后清理只用于启动的输入变量；服务身份变量继续保留给 runtime helper。
-unset TESTAGENT_CLOUD_USER_ID \
-    TESTAGENT_CLOUD_GITEE_URL \
-    TESTAGENT_CLOUD_GITEE_USER \
-    TESTAGENT_CLOUD_GITEE_REPOSITORY \
-    TESTAGENT_CLOUD_GITEE_BRANCH \
-    TESTAGENT_CLOUD_PIP_URL \
-    TESTAGENT_CLOUD_NPM_URL
-unset GITEE_URL GITEE_USER GITEE_REPOSITORY GITEE_BRANCH GIT_URL
 unset GIT_INIT_DEADLINE
 umask "$GIT_OLD_UMASK"
 echo "[start] 云端码云初始化流程完成"
