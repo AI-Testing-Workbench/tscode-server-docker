@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+"""用户手动执行的 git 凭证上传命令"""
+
+import base64
+import json
+import os
+import stat
+import sys
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, unquote, urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+CREDENTIAL_FILE = Path(
+    base64.b64decode(
+        "L3Jvb3QvLmdpdC1oZWxwZXIvLmdpdC1jcmVkZW50aWFscw==", validate=True
+    ).decode("utf-8")
+)
+EXTRA_FILE = Path(
+    base64.b64decode(
+        "L3Jvb3QvLmdpdC1oZWxwZXIvLmdpdC1leHRyYQ==", validate=True
+    ).decode("utf-8")
+)
+HTTP_TIMEOUT_SECONDS = 10
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    """禁止凭证请求跟随重定向发送到其他主机。"""
+
+    def redirect_request(self, request, file, code, message, headers, new_url):
+        return None
+
+
+HTTP_CLIENT = build_opener(_NoRedirectHandler)
+
+
+class _ServiceRejected(Exception):
+    def __init__(self, status):
+        super().__init__()
+        self.status = status
+
+
+def _print_success(message):
+    print("\033[1;32m[upload_to_testagent] " + message + "\033[0m", file=sys.stderr)
+
+
+def _print_error(category, detail=""):
+    messages = {
+        "cloud_mode_required": "云端模式未启用",
+        "extra_file": "本地身份文件不可用",
+        "credential_type": "本地凭证类型不支持",
+        "credential_file": "本地凭证文件不可用",
+        "credential_missing": "未找到可上传的本地凭证",
+        "credential_incomplete": "本地凭证信息不完整",
+        "service_configuration": "服务配置无效",
+        "service_request": "上传请求失败",
+        "service_rejected": "服务端拒绝凭证",
+        "arguments_not_supported": "命令不接受参数",
+        "internal": "上传命令内部错误",
+    }
+    summary = messages.get(category, "上传失败")
+    suffix = " " + detail if detail else ""
+    print("\033[1;31m[upload_to_testagent] 错误：" + summary + suffix + "\033[0m", file=sys.stderr)
+
+
+def _safe_value(value):
+    return isinstance(value, str) and "\x00" not in value and "\r" not in value and "\n" not in value
+
+
+def _safe_identity(value):
+    return _safe_value(value) and not any(
+        ord(character) < 32 or ord(character) == 127 for character in value
+    )
+
+
+def _regular_file(path):
+    try:
+        metadata = os.lstat(path)
+    except OSError:
+        return False
+    return (
+        not os.path.islink(path)
+        and stat.S_ISREG(metadata.st_mode)
+        and metadata.st_nlink == 1
+        and stat.S_IMODE(metadata.st_mode) == 0o600
+    )
+
+
+def _read_extra():
+    if not os.path.lexists(EXTRA_FILE):
+        return {}
+    if not _regular_file(EXTRA_FILE):
+        raise OSError("invalid extra file")
+    values = {}
+    with open(EXTRA_FILE, "r", encoding="utf-8", errors="replace") as stream:
+        for line in stream:
+            line = line.rstrip("\r\n")
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            if key not in ("type", "git_username", "git_email") or not _safe_identity(value):
+                continue
+            if key == "type" and value != "password":
+                continue
+            values[key] = value
+    return values
+
+
+def _latest_credential():
+    if not _regular_file(CREDENTIAL_FILE):
+        return {}
+    latest = {}
+    try:
+        with open(CREDENTIAL_FILE, "r", encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    parsed = urlsplit(line)
+                    _ = parsed.port
+                except ValueError:
+                    continue
+                if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                    continue
+                username = unquote(parsed.username or "")
+                password = unquote(parsed.password or "")
+                if _safe_value(username) and _safe_value(password) and password:
+                    latest = {"username": username, "password": password}
+    except OSError:
+        return {}
+    return latest
+
+
+def _service_url():
+    value = os.environ.get("TESTAGENT_CLOUD_SERVICE_URL", "")
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError("invalid service url")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValueError("invalid service url")
+    try:
+        parsed = urlsplit(value)
+        _ = parsed.port
+        hostname = parsed.hostname
+    except ValueError:
+        raise ValueError("invalid service url")
+    if (
+        parsed.scheme not in ("http", "https")
+        or not parsed.netloc
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("invalid service url")
+    return value.rstrip("/")
+
+
+def _upload(username, email, password):
+    service_user = os.environ.get("TESTAGENT_CLOUD_SERVICE_USER", "")
+    service_id = os.environ.get("TESTAGENT_CLOUD_SERVICE_ID", "")
+    if (
+        not service_user
+        or not service_id
+        or not _safe_identity(service_user)
+        or not _safe_identity(service_id)
+    ):
+        raise ValueError("service identity unavailable")
+    endpoint = _service_url() + "/git/" + quote(service_id, safe="") + "/credential"
+    body = json.dumps(
+        {
+            "type": "password",
+            "git_username": username,
+            "git_email": email,
+            "git_password": password,
+            "persist": True,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    request = Request(
+        endpoint,
+        data=body,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-Operator-User-ID": service_user,
+        },
+        method="POST",
+    )
+    try:
+        with HTTP_CLIENT.open(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+            status = response.getcode()
+    except HTTPError as error:
+        status = error.code
+    except (OSError, URLError, ValueError):
+        raise OSError("service request failed")
+    if status != 204:
+        raise _ServiceRejected(status)
+
+
+def main():
+    if len(sys.argv) != 1:
+        _print_error("arguments_not_supported", "用法：upload_to_testagent")
+        return 1
+    if os.environ.get("TESTAGENT_CLOUD_MODE") != "1":
+        _print_error("cloud_mode_required")
+        return 1
+    try:
+        extra = _read_extra()
+    except OSError:
+        _print_error("extra_file")
+        return 1
+    if extra.get("type", "password") != "password":
+        _print_error("credential_type")
+        return 1
+    stored = _latest_credential()
+    if not stored:
+        _print_error("credential_missing")
+        return 1
+    username = stored.get("username") or extra.get("git_username", "")
+    email = extra.get("git_email", "")
+    password = stored.get("password", "")
+    if (
+        not _safe_identity(username)
+        or not username
+        or not username.strip()
+        or not _safe_identity(email)
+        or (email and not email.strip())
+        or not _safe_value(password)
+        or not password
+        or not password.strip()
+    ):
+        _print_error("credential_incomplete")
+        return 1
+    try:
+        _upload(username, email, password)
+    except _ServiceRejected as error:
+        _print_error("service_rejected", "HTTP 状态码=" + str(error.status))
+        return 1
+    except ValueError:
+        _print_error("service_configuration")
+        return 1
+    except OSError:
+        _print_error("service_request")
+        return 1
+    _print_success("已成功加密上传 git 凭证！")
+    return 0
+
+
+try:
+    raise SystemExit(main())
+except Exception:
+    _print_error("internal")
+    raise SystemExit(1)

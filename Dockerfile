@@ -174,6 +174,11 @@ WORKDIR /app
 RUN mkdir -p /tmp/.X11-unix \
     && chmod 1777 /tmp/.X11-unix
 
+# 设置用户手动上传 git 凭证命令
+COPY upload_to_testagent /usr/local/bin/upload_to_testagent
+RUN sed -i 's/\r$//' /usr/local/bin/upload_to_testagent \
+    && chmod 0755 /usr/local/bin/upload_to_testagent
+
 # 配置启动脚本
 COPY start.sh /root/.start.sh
 COPY chrome.sh /root/.chrome.sh
