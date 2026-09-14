@@ -1155,6 +1155,7 @@ else
     export GIT_INIT_DEADLINE
     GIT_ATTEMPT=1
     GIT_CLONE_SUCCESS=0
+    GIT_ENV_DUMPED=0
     while [ "$GIT_ATTEMPT" -le "$GIT_MAX_ATTEMPTS" ]; do
         if ! GIT_NOW_SECONDS=$(date +%s); then
             echo "[start] 初始化计时器不可用" >&2
@@ -1197,15 +1198,27 @@ else
             break
         fi
         echo "[start] Git clone 失败：attempt=$GIT_ATTEMPT/$GIT_MAX_ATTEMPTS exit=$GIT_CLONE_STATUS" >&2
+        if [ "$GIT_ENV_DUMPED" -eq 0 ]; then
+            echo "[start] Git clone 失败时的环境变量" >&2
+            if ! env | LC_ALL=C sort | LC_ALL=C awk -F= '
+                {
+                    variable_name = tolower($1)
+                    if (variable_name ~ /password/) {
+                        print "[start] 环境变量: " $1 "=<redacted>"
+                    } else {
+                        print "[start] 环境变量: " $0
+                    }
+                }' >&2; then
+                echo "[start] Git clone 失败时环境变量输出失败" >&2
+            fi
+            echo "[start] Git clone 失败时环境变量结束" >&2
+            GIT_ENV_DUMPED=1
+        fi
         if [ -n "$GIT_CLONE_OUTPUT" ]; then
             echo "[start] Git clone 详细诊断开始 (地址、凭证和敏感字段已脱敏)" >&2
             printf '%s\n' "$GIT_CLONE_OUTPUT" |
                 LC_ALL=C tr -d '\000-\010\013\014\015\016-\037\177' |
                 LC_ALL=C sed -E \
-                    -e "s#https?://[^[:space:]'\"]+#<redacted-git-url>#g" \
-                    -e "s#git://[^[:space:]'\"]+#<redacted-git-url>#g" \
-                    -e "s#ssh://[^[:space:]'\"]+#<redacted-git-url>#g" \
-                    -e "s#git@[^[:space:]:]+:[^[:space:]'\"]+#<redacted-git-url>#g" \
                     -e 's#(password|token|secret|authorization)[[:space:]]*[=:][[:space:]]*[^[:space:]]*#\1=<redacted>#Ig' |
                 LC_ALL=C awk \
                     -v max_lines="$GIT_DIAGNOSTIC_MAX_LINES" \
