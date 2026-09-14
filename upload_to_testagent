@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""用户手动执行的 git 凭证上传命令"""
+"""用户手动执行的码云凭证上传命令"""
 
 import base64
 import json
@@ -245,7 +245,7 @@ def main():
     except OSError:
         _print_error("service_request")
         return 1
-    _print_success("已成功加密上传 git 凭证！")
+    _print_success("已成功加密上传码云信息！")
     return 0
 
 

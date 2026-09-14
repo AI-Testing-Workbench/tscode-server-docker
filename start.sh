@@ -50,7 +50,7 @@ if [ "$TESTAGENT_CLOUD_MODE" = "1" ]; then
 # 仅在云端流程启用期间临时收紧文件默认权限，退出前恢复原值，避免影响后续启动逻辑。
 GIT_OLD_UMASK=$(umask)
 umask 077
-echo "[start] 云端模式已启用，开始 Git 初始化"
+echo "[start] 云端模式已启用，开始码云初始化"
 
 # 校验初始化 helper 依赖的 Python 3 和 Git 命令。
 if ! command -v python3 >/dev/null 2>&1 || ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then
@@ -107,10 +107,10 @@ if parsed.query or parsed.fragment:
     raise SystemExit(1)
 PY
 then
-    echo "[start] Git 服务地址或身份非法" >&2
+    echo "[start] 码云服务地址或身份非法" >&2
     exit 1
 fi
-echo "[start] 基础环境和 Git 服务参数校验通过"
+echo "[start] 基础环境和码云服务参数校验通过"
 
 # 校验可选 PIP/NPM 镜像地址，防止把非法地址写入全局工具配置。
 if ! python3 - "${TESTAGENT_CLOUD_PIP_URL:-}" "${TESTAGENT_CLOUD_NPM_URL:-}" <<'PY'
@@ -185,30 +185,30 @@ if ! chmod 0700 "$GIT_HELPER_DIR"; then
     exit 1
 fi
 if [ -L "$GIT_CREDENTIAL_FILE" ] || { [ -e "$GIT_CREDENTIAL_FILE" ] && [ ! -f "$GIT_CREDENTIAL_FILE" ]; }; then
-    echo "[start] Git 凭证文件类型非法" >&2
+    echo "[start] 码云凭证文件类型非法" >&2
     exit 1
 fi
 if [ -L "$GIT_EXTRA_FILE" ] || { [ -e "$GIT_EXTRA_FILE" ] && [ ! -f "$GIT_EXTRA_FILE" ]; }; then
-    echo "[start] Git 身份文件类型非法" >&2
+    echo "[start] 码云身份文件类型非法" >&2
     exit 1
 fi
 if [ -e "$GIT_CREDENTIAL_FILE" ] && [ "$(stat -c '%h' "$GIT_CREDENTIAL_FILE" 2>/dev/null)" != "1" ]; then
-    echo "[start] Git 凭证文件链接数非法" >&2
+    echo "[start] 码云凭证文件链接数非法" >&2
     exit 1
 fi
 if [ -e "$GIT_EXTRA_FILE" ] && [ "$(stat -c '%h' "$GIT_EXTRA_FILE" 2>/dev/null)" != "1" ]; then
-    echo "[start] Git 身份文件链接数非法" >&2
+    echo "[start] 码云身份文件链接数非法" >&2
     exit 1
 fi
 if [ ! -e "$GIT_CREDENTIAL_FILE" ]; then
     if ! (umask 077; : > "$GIT_CREDENTIAL_FILE"); then
-        echo "[start] Git 凭证文件创建失败" >&2
+        echo "[start] 码云凭证文件创建失败" >&2
         exit 1
     fi
 fi
 if [ ! -e "$GIT_EXTRA_FILE" ]; then
     if ! (umask 077; : > "$GIT_EXTRA_FILE"); then
-        echo "[start] Git 身份文件创建失败" >&2
+        echo "[start] 码云身份文件创建失败" >&2
         exit 1
     fi
 fi
@@ -906,7 +906,7 @@ def _handle_store(request):
     # 运行期不在 credential helper 内读取终端；用户需要显式执行上传命令。
     _progress("runtime local credential store complete")
     print(
-        "\033[1;33m[TS Code] git 凭证已保存至本地，并且将随着服务销毁而删除，如需持久化使用，请手动执行 upload_to_testagent 命令以加密上传至 TestAgent Cloud 数据库\033[0m",
+        "\033[1;33m[TS Code] 码云凭证已保存至本地，并且将随着云端服务的销毁而删除，如需持久化使用，请手动执行 upload_to_testagent 命令以加密上传至 TestAgent Cloud 数据库\033[0m",
         file=sys.stderr,
     )
     return 0
@@ -1020,10 +1020,10 @@ GITEE_BRANCH="${TESTAGENT_CLOUD_GITEE_BRANCH:-}"
 
 if [ -z "$GITEE_URL" ] && [ -z "$GITEE_USER" ] && [ -z "$GITEE_REPOSITORY" ]; then
     GIT_URL=""
-    echo "[start] 未配置 Gitee，跳过 Git clone 和凭证获取"
+    echo "[start] 未配置码云地址，跳过 Git clone 和凭证获取"
 else
     if [ -z "$GITEE_URL" ] || [ -z "$GITEE_USER" ] || [ -z "$GITEE_REPOSITORY" ]; then
-        echo "[start] Gitee 配置不完整" >&2
+        echo "[start] 码云地址配置不完整" >&2
         "$GIT_INIT_HELPER" --report failed_initialize </dev/null >/dev/null 2>&1 || true
         exit 1
     fi
@@ -1093,11 +1093,11 @@ else:
     print(base + "/" + user + "/" + repository + ".git")
 PY
 ); then
-        echo "[start] Gitee 地址或路径字段非法" >&2
+        echo "[start] 码云地址或路径字段非法" >&2
         "$GIT_INIT_HELPER" --report failed_initialize </dev/null >/dev/null 2>&1 || true
         exit 1
     fi
-    echo "[start] Gitee 配置和 Git 地址校验通过"
+    echo "[start] 码云配置和码云地址校验通过"
 fi
 
 if [ -z "$GIT_URL" ]; then
@@ -1198,7 +1198,7 @@ else
         fi
         echo "[start] Git clone 失败：attempt=$GIT_ATTEMPT/$GIT_MAX_ATTEMPTS exit=$GIT_CLONE_STATUS" >&2
         if [ -n "$GIT_CLONE_OUTPUT" ]; then
-            echo "[start] Git clone 详细诊断开始（地址、凭证和敏感字段已脱敏）" >&2
+            echo "[start] Git clone 详细诊断开始 (地址、凭证和敏感字段已脱敏)" >&2
             printf '%s\n' "$GIT_CLONE_OUTPUT" |
                 LC_ALL=C tr -d '\000-\010\013\014\015\016-\037\177' |
                 LC_ALL=C sed -E \
@@ -1313,25 +1313,25 @@ else
         fi
         if [[ "$GIT_CLONE_OUTPUT_LOWER" == *"credential helper error: service"* ]] || [[ "$GIT_CLONE_OUTPUT_LOWER" == *"credential helper error: unauthorized"* ]] || [[ "$GIT_CLONE_OUTPUT_LOWER" == *"credential helper error: not_found"* ]]; then
             unset GIT_CLONE_OUTPUT GIT_CLONE_OUTPUT_LOWER
-            echo "[start] Git 凭证服务处理失败" >&2
+            echo "[start] 码云凭证服务处理失败" >&2
             "$GIT_INIT_HELPER" --report failed_service </dev/null >/dev/null 2>&1 || true
             exit 1
         fi
         if [[ "$GIT_CLONE_OUTPUT_LOWER" == *"credential helper error: unexpected_state"* ]] || [[ "$GIT_CLONE_OUTPUT_LOWER" == *"credential helper error: invalid_credential"* ]]; then
             unset GIT_CLONE_OUTPUT GIT_CLONE_OUTPUT_LOWER
-            echo "[start] Git 凭证状态异常" >&2
+            echo "[start] 码云凭证状态异常" >&2
             "$GIT_INIT_HELPER" --report failed_unexpected_state </dev/null >/dev/null 2>&1 || true
             exit 1
         fi
         if [[ "$GIT_CLONE_OUTPUT_LOWER" == *"credential helper error: local"* ]] || [[ "$GIT_CLONE_OUTPUT_LOWER" == *"credential helper error: internal"* ]]; then
             unset GIT_CLONE_OUTPUT GIT_CLONE_OUTPUT_LOWER
-            echo "[start] Git 本地凭证处理失败" >&2
+            echo "[start] 码云本地凭证处理失败" >&2
             "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
             exit 1
         fi
         if [[ "$GIT_CLONE_OUTPUT_LOWER" == *"credential helper error: remote_failed"* ]]; then
             unset GIT_CLONE_OUTPUT GIT_CLONE_OUTPUT_LOWER
-            echo "[start] Git 服务已返回失败终态" >&2
+            echo "[start] 码云服务已返回失败终态" >&2
             exit 1
         fi
         if [[ "$GIT_CLONE_OUTPUT_LOWER" == *"requested url returned error: 400"* ]] \
@@ -1422,32 +1422,32 @@ else
                     ;;
             esac
         done < "$GIT_EXTRA_FILE"; then
-            echo "[start] Git 身份文件读取失败" >&2
+            echo "[start] 码云身份文件读取失败" >&2
             "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
             exit 1
         fi
     fi
     if [ -n "$GIT_USERNAME" ]; then
         if ! git config --global user.name "$GIT_USERNAME" >/dev/null 2>&1 || ! git config --global user.email "$GIT_EMAIL" >/dev/null 2>&1; then
-            echo "[start] Git 用户身份配置失败" >&2
+            echo "[start] 码云用户身份配置失败" >&2
             "$GIT_INIT_HELPER" --report failed_initialize </dev/null >/dev/null 2>&1 || true
             exit 1
         fi
-        echo "[start] Git 用户身份配置完成"
+        echo "[start] 码云用户身份配置完成"
     else
-        echo "[start] 未找到 Git 用户身份元数据，保持现有身份配置"
+        echo "[start] 未找到码云用户身份元数据，保持现有身份配置"
     fi
     if ! chmod 0600 "$GIT_CREDENTIAL_FILE" "$GIT_EXTRA_FILE"; then
-        echo "[start] Git 本地文件权限校验失败" >&2
+        echo "[start] 码云本地文件权限校验失败" >&2
         "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
         exit 1
     fi
     if [ "$(stat -c '%a' "$GIT_CREDENTIAL_FILE" 2>/dev/null)" != "600" ] || [ "$(stat -c '%a' "$GIT_EXTRA_FILE" 2>/dev/null)" != "600" ]; then
-        echo "[start] Git 本地文件权限校验失败" >&2
+        echo "[start] 码云本地文件权限校验失败" >&2
         "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
         exit 1
     fi
-    echo "[start] Git 本地凭证文件权限确认完成"
+    echo "[start] 码云本地凭证文件权限确认完成"
     # 初始化成功门禁：先切换 runtime helper，再确认服务端接受 initialized。
     if ! git config --global --unset-all credential.helper >/dev/null 2>&1; then
         :
@@ -1477,9 +1477,9 @@ unset TESTAGENT_CLOUD_USER_ID \
 unset GITEE_URL GITEE_USER GITEE_REPOSITORY GITEE_BRANCH GIT_URL
 unset GIT_INIT_DEADLINE
 umask "$GIT_OLD_UMASK"
-echo "[start] 云端 Git 初始化流程完成"
+echo "[start] 云端码云初始化流程完成"
 else
-    echo "[start] TESTAGENT_CLOUD_MODE 非 1，跳过云端 Git 初始化"
+    echo "[start] TESTAGENT_CLOUD_MODE 非 1，跳过云端码云初始化"
 fi
 
 # --- End ---
