@@ -35,6 +35,10 @@ GIT_EXTRA_FILE=/root/.git-helper/.git-extra
 GIT_INIT_HELPER=/root/.git-helper/init-credential-helper
 # 初始化成功后使用的 credential helper，只处理本地凭证和可选同步。
 GIT_RUNTIME_HELPER=/root/.git-helper/runtime-credential-helper
+# 运行期认证被拒绝后的重新认证标记，不保存凭证或服务状态。
+GIT_RUNTIME_REJECTED_FILE=/root/.git-helper/.runtime-credential-rejected
+# 运行期 Git 命令入口；初始化完成前不放入 PATH。
+GIT_RUNTIME_WRAPPER=/usr/local/bin/git
 
 # Gitee 仓库必须直接 clone 到的工作目录。
 GIT_APP_DIR=/app
@@ -200,6 +204,10 @@ if [ -e "$GIT_EXTRA_FILE" ] && [ "$(stat -c '%h' "$GIT_EXTRA_FILE" 2>/dev/null)"
     echo "[start] 码云身份文件链接数非法" >&2
     exit 1
 fi
+if ! rm -f -- "$GIT_RUNTIME_REJECTED_FILE"; then
+    echo "[start] 运行期凭证状态文件清理失败" >&2
+    exit 1
+fi
 if [ ! -e "$GIT_CREDENTIAL_FILE" ]; then
     if ! (umask 077; : > "$GIT_CREDENTIAL_FILE"); then
         echo "[start] 码云凭证文件创建失败" >&2
@@ -246,6 +254,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 # These placeholders are replaced by the shell constants before installation.
 CREDENTIAL_FILE = "__CREDENTIAL_FILE__"
 EXTRA_FILE = "__EXTRA_FILE__"
+RUNTIME_REJECTED_FILE = "__RUNTIME_REJECTED_FILE__"
 INIT_TIMEOUT_SECONDS = __INIT_TIMEOUT_SECONDS__
 MAX_ATTEMPTS = __MAX_ATTEMPTS__
 POLL_INTERVAL_SECONDS = __POLL_INTERVAL_SECONDS__
@@ -351,6 +360,61 @@ def _regular_file(path):
         return False
 
 
+def _runtime_rejection_pending():
+    if HELPER_PHASE != "runtime" or not os.path.lexists(RUNTIME_REJECTED_FILE):
+        return False
+    if not _regular_file(RUNTIME_REJECTED_FILE):
+        return None
+    return True
+
+
+def _mark_runtime_rejection():
+    if HELPER_PHASE != "runtime":
+        return True
+    directory = str(Path(RUNTIME_REJECTED_FILE).parent)
+    file_descriptor = None
+    temporary_path = None
+    try:
+        file_descriptor, temporary_path = tempfile.mkstemp(
+            prefix=".runtime-credential-rejected.", dir=directory
+        )
+        os.fchmod(file_descriptor, 0o600)
+        with os.fdopen(file_descriptor, "w", encoding="ascii", newline="\n") as stream:
+            file_descriptor = None
+            stream.write("rejected\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, RUNTIME_REJECTED_FILE)
+        temporary_path = None
+        os.chmod(RUNTIME_REJECTED_FILE, 0o600)
+        return True
+    except (OSError, ValueError):
+        return False
+    finally:
+        if file_descriptor is not None:
+            try:
+                os.close(file_descriptor)
+            except OSError:
+                pass
+        if temporary_path is not None:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+
+
+def _clear_runtime_rejection():
+    if HELPER_PHASE != "runtime" or not os.path.lexists(RUNTIME_REJECTED_FILE):
+        return True
+    if not _regular_file(RUNTIME_REJECTED_FILE):
+        return False
+    try:
+        os.unlink(RUNTIME_REJECTED_FILE)
+    except OSError:
+        return False
+    return True
+
+
 def _prepare_credential_file(create):
     if os.path.lexists(CREDENTIAL_FILE):
         if not _regular_file(CREDENTIAL_FILE):
@@ -414,6 +478,15 @@ def _read_local_credential(request):
     if not ok:
         return False, {}
     return True, _parse_protocol_output(output)
+
+
+def _clear_local_credential(request):
+    if not _prepare_credential_file(True):
+        return False
+    ok, _ = _credential_store("erase", request)
+    if not ok:
+        return False
+    return _write_extra({})
 
 
 def _is_initialization_target(request):
@@ -882,6 +955,15 @@ def _handle_init_get(request):
 
 
 def _handle_runtime_get(request):
+    # Keep returning an empty credential until a newly entered credential is stored.
+    rejection_pending = _runtime_rejection_pending()
+    if rejection_pending is None:
+        _error("local")
+        return 1
+    if rejection_pending:
+        _progress("runtime credential rejected; returning empty credential without API")
+        return 0
+
     # Runtime get prefers local storage, then performs one API fallback before Git prompts.
     local_ok, stored = _read_local_credential(request)
     if local_ok and stored.get("password"):
@@ -889,9 +971,18 @@ def _handle_runtime_get(request):
             _error("local")
         if _output_credential(request, stored):
             return 0
-        _progress("runtime local credential output failed; trying API")
-    else:
-        _progress("runtime local credential unavailable; trying API")
+        if not _clear_local_credential(request) or not _mark_runtime_rejection():
+            _error("local")
+            return 1
+        _progress("runtime local credential invalid; returning empty credential without API")
+        return 0
+    if not local_ok:
+        if not _clear_local_credential(request) or not _mark_runtime_rejection():
+            _error("local")
+            return 1
+        _progress("runtime local credential unreadable; returning empty credential without API")
+        return 0
+    _progress("runtime local credential unavailable; trying API")
 
     credential = _runtime_api_credential()
     if credential is None:
@@ -903,6 +994,9 @@ def _handle_runtime_get(request):
         {"username": credential["git_username"], "password": credential["git_password"]},
     ):
         return 0
+    if not _clear_local_credential(request) or not _mark_runtime_rejection():
+        _error("local")
+        return 1
     _error("local")
     return 1
 
@@ -959,6 +1053,9 @@ def _handle_store(request):
         return 1
     if HELPER_PHASE != "runtime":
         return 0
+    if not _clear_runtime_rejection():
+        _error("local")
+        return 1
     if local_credential_unchanged:
         _progress("runtime credential already stored; upload prompt skipped")
         return 0
@@ -973,15 +1070,16 @@ def _handle_store(request):
 
 
 def _handle_erase(request):
-    # Erase removes only local matching data; init additionally reports rejection.
-    if not _prepare_credential_file(True):
+    # Erase clears local data; runtime blocks API fallback until a new store.
+    if not _clear_local_credential(request):
         _error("local")
         return 1
-    ok, _ = _credential_store("erase", request)
-    extra_ok = _write_extra({})
-    if not ok or not extra_ok:
-        _error("local")
-        return 1
+    if HELPER_PHASE == "runtime":
+        if not _mark_runtime_rejection():
+            _error("local")
+            return 1
+        _progress("runtime credential cleared; subsequent lookups use empty credential without API")
+        return 0
     if HELPER_PHASE == "init" and not _report_status("credential_rejected"):
         _error("service")
     return 0
@@ -1033,6 +1131,7 @@ fi
 if ! sed -i \
     -e "s|__CREDENTIAL_FILE__|$GIT_CREDENTIAL_FILE|g" \
     -e "s|__EXTRA_FILE__|$GIT_EXTRA_FILE|g" \
+    -e "s|__RUNTIME_REJECTED_FILE__|$GIT_RUNTIME_REJECTED_FILE|g" \
     -e "s|__INIT_TIMEOUT_SECONDS__|$GIT_INIT_TIMEOUT_SECONDS|g" \
     -e "s|__MAX_ATTEMPTS__|$GIT_MAX_ATTEMPTS|g" \
     -e "s|__POLL_INTERVAL_SECONDS__|$GIT_CREDENTIAL_POLL_INTERVAL_SECONDS|g" \
@@ -1170,12 +1269,6 @@ if [ -z "$GIT_URL" ]; then
         "$GIT_INIT_HELPER" --report failed_initialize </dev/null >/dev/null 2>&1 || true
         exit 1
     fi
-    if ! "$GIT_INIT_HELPER" --report initialized </dev/null >/dev/null 2>&1; then
-        echo "[start] Git initialized 状态上报失败" >&2
-        "$GIT_INIT_HELPER" --report failed_initialize </dev/null >/dev/null 2>&1 || true
-        exit 1
-    fi
-    echo "[start] Git 状态 initialized 已上报"
 else
     # 完整仓库配置才允许接管 /app，并在 clone 前上报 processing。
     if [ ! -d "$GIT_APP_DIR" ]; then
@@ -1531,13 +1624,85 @@ else
         exit 1
     fi
     echo "[start] 运行期 credential helper 已启用"
-    if ! "$GIT_INIT_HELPER" --report initialized </dev/null >/dev/null 2>&1; then
-        echo "[start] Git initialized 状态上报失败" >&2
-        "$GIT_INIT_HELPER" --report failed_initialize </dev/null >/dev/null 2>&1 || true
-        exit 1
-    fi
-    echo "[start] Git 状态 initialized 已上报"
 fi
+
+# 运行期命令需要在认证失败后立即重跑一次；初始化阶段尚未安装此入口。
+if [ -L "$GIT_RUNTIME_WRAPPER" ] || { [ -e "$GIT_RUNTIME_WRAPPER" ] && [ ! -f "$GIT_RUNTIME_WRAPPER" ]; }; then
+    echo "[start] 运行期 Git 入口类型非法" >&2
+    "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+    exit 1
+fi
+if ! GIT_RUNTIME_WRAPPER_TEMP=$(mktemp "$GIT_HELPER_DIR/.runtime-git.XXXXXX"); then
+    echo "[start] 运行期 Git 入口临时文件创建失败" >&2
+    "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+    exit 1
+fi
+if ! cat > "$GIT_RUNTIME_WRAPPER_TEMP" <<'SH'
+#!/bin/bash
+
+set -u
+
+REAL_GIT=/usr/bin/git
+REJECTED_FILE=__RUNTIME_REJECTED_FILE__
+RETRY_OPERATION=0
+
+for ARGUMENT in "$@"; do
+    case "$ARGUMENT" in
+        clone | fetch | pull | push | ls-remote | submodule)
+            RETRY_OPERATION=1
+            break
+            ;;
+    esac
+done
+
+if [ "$RETRY_OPERATION" -eq 0 ]; then
+    exec "$REAL_GIT" "$@"
+fi
+
+if ! OUTPUT_FILE=$(mktemp "${TMPDIR:-/tmp}/tscode-runtime-git.XXXXXX"); then
+    exec "$REAL_GIT" "$@"
+fi
+
+"$REAL_GIT" "$@" > >(tee "$OUTPUT_FILE") 2> >(tee -a "$OUTPUT_FILE" >&2)
+GIT_STATUS=$?
+wait
+
+if [ "$GIT_STATUS" -eq 0 ]; then
+    rm -f -- "$OUTPUT_FILE"
+    exit 0
+fi
+
+if [ ! -f "$REJECTED_FILE" ] || ! grep -Eiq -- \
+    'authentication failed|authentication required|invalid (username|user(name)?|password|token)|incorrect (username|password)|access denied|unauthorized|http basic:.*access denied|requested url returned error: (401|403)|remote:.*(401|403)' \
+    "$OUTPUT_FILE"; then
+    rm -f -- "$OUTPUT_FILE"
+    exit "$GIT_STATUS"
+fi
+
+rm -f -- "$OUTPUT_FILE"
+exec "$REAL_GIT" "$@"
+SH
+then
+    rm -f -- "$GIT_RUNTIME_WRAPPER_TEMP" || true
+    echo "[start] 运行期 Git 入口生成失败" >&2
+    "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+    exit 1
+fi
+if ! sed -i \
+    -e "s|__RUNTIME_REJECTED_FILE__|$GIT_RUNTIME_REJECTED_FILE|g" \
+    "$GIT_RUNTIME_WRAPPER_TEMP" || ! chmod 0755 "$GIT_RUNTIME_WRAPPER_TEMP" || ! mv -fT -- "$GIT_RUNTIME_WRAPPER_TEMP" "$GIT_RUNTIME_WRAPPER"; then
+    rm -f -- "$GIT_RUNTIME_WRAPPER_TEMP" || true
+    echo "[start] 运行期 Git 入口安装失败" >&2
+    "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+    exit 1
+fi
+echo "[start] 运行期 Git 认证失败自动重试已启用"
+if ! "$GIT_INIT_HELPER" --report initialized </dev/null >/dev/null 2>&1; then
+    echo "[start] Git initialized 状态上报失败" >&2
+    "$GIT_INIT_HELPER" --report failed_initialize </dev/null >/dev/null 2>&1 || true
+    exit 1
+fi
+echo "[start] Git 状态 initialized 已上报"
 
 unset GIT_INIT_DEADLINE
 umask "$GIT_OLD_UMASK"
