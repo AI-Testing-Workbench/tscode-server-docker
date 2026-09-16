@@ -56,13 +56,21 @@ GIT_OLD_UMASK=$(umask)
 umask 077
 echo "[start] 云端模式已启用，开始码云初始化"
 
+# 启动最初只输出 TESTAGENT 前缀的环境变量，便于确认调用方注入的输入。
+echo "[start] 启动时 TESTAGENT 环境变量开始" >&2
+if ! env | LC_ALL=C sort | LC_ALL=C awk -F= '$1 ~ /^TESTAGENT/ { print "[start] 环境变量: " $0 }' >&2; then
+    echo "[start] 启动时 TESTAGENT 环境变量输出失败" >&2
+fi
+echo "[start] 启动时 TESTAGENT 环境变量结束" >&2
+
+
 # 校验初始化 helper 依赖的 Python 3 和 Git 命令。
-if ! command -v python3 >/dev/null 2>&1 || ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then
+if ! command -v python3 || ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info[0] == 3 else 1)'; then
     echo "[start] Python 3 不可用" >&2
     exit 1
 fi
 
-if ! command -v git >/dev/null 2>&1 || ! command -v timeout >/dev/null 2>&1; then
+if ! command -v git || ! command -v timeout; then
     echo "[start] Git 不可用" >&2
     exit 1
 fi
@@ -146,7 +154,7 @@ fi
 
 # 代理地址校验通过后才写入 pip 全局配置，避免污染当前用户环境。
 if [ -n "${TESTAGENT_CLOUD_PIP_URL:-}" ]; then
-    if ! python3 -m pip config --global set global.index-url "$TESTAGENT_CLOUD_PIP_URL" >/dev/null 2>&1; then
+    if ! python3 -m pip config --global set global.index-url "$TESTAGENT_CLOUD_PIP_URL"; then
         echo "[start] PIP 镜像配置失败" >&2
         exit 1
     fi
@@ -157,11 +165,11 @@ fi
 
 # npm 使用全局 registry 配置；空值表示调用方未要求覆盖镜像源。
 if [ -n "${TESTAGENT_CLOUD_NPM_URL:-}" ]; then
-    if ! command -v npm >/dev/null 2>&1; then
+    if ! command -v npm; then
         echo "[start] NPM 不可用" >&2
         exit 1
     fi
-    if ! npm config set registry "$TESTAGENT_CLOUD_NPM_URL" --global >/dev/null 2>&1; then
+    if ! npm config set registry "$TESTAGENT_CLOUD_NPM_URL" --global; then
         echo "[start] NPM 镜像配置失败" >&2
         exit 1
     fi
@@ -196,11 +204,11 @@ if [ -L "$GIT_EXTRA_FILE" ] || { [ -e "$GIT_EXTRA_FILE" ] && [ ! -f "$GIT_EXTRA_
     echo "[start] 码云身份文件类型非法" >&2
     exit 1
 fi
-if [ -e "$GIT_CREDENTIAL_FILE" ] && [ "$(stat -c '%h' "$GIT_CREDENTIAL_FILE" 2>/dev/null)" != "1" ]; then
+if [ -e "$GIT_CREDENTIAL_FILE" ] && [ "$(stat -c '%h' "$GIT_CREDENTIAL_FILE")" != "1" ]; then
     echo "[start] 码云凭证文件链接数非法" >&2
     exit 1
 fi
-if [ -e "$GIT_EXTRA_FILE" ] && [ "$(stat -c '%h' "$GIT_EXTRA_FILE" 2>/dev/null)" != "1" ]; then
+if [ -e "$GIT_EXTRA_FILE" ] && [ "$(stat -c '%h' "$GIT_EXTRA_FILE")" != "1" ]; then
     echo "[start] 码云身份文件链接数非法" >&2
     exit 1
 fi
@@ -241,6 +249,7 @@ phase, while all credential persistence remains in the two fixed local files.
 
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -261,6 +270,10 @@ POLL_INTERVAL_SECONDS = __POLL_INTERVAL_SECONDS__
 # Bound every individual service request even when the caller is interactive.
 HTTP_TIMEOUT_SECONDS = 10
 MAX_RESPONSE_BYTES = 65536
+MAX_RESPONSE_PREVIEW_BYTES = 4096
+SENSITIVE_RESPONSE_KEY = re.compile(
+    r"password|token|secret|authorization|credential", re.IGNORECASE
+)
 # Git passes the helper basename as argv[0]; init and runtime have different API rules.
 HELPER_PHASE = (
     "init"
@@ -304,6 +317,52 @@ def _progress(message):
         "git credential helper progress: phase=" + HELPER_PHASE + " " + message,
         file=sys.stderr,
     )
+
+
+def _redact_response_value(value):
+    if isinstance(value, dict):
+        return {
+            key: "<redacted>"
+            if SENSITIVE_RESPONSE_KEY.search(str(key))
+            else _redact_response_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_response_value(item) for item in value]
+    return value
+
+
+def _response_preview(body):
+    if not body:
+        return "<empty>"
+    try:
+        text = body.decode("utf-8", "replace")
+    except AttributeError:
+        text = str(body)
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    else:
+        text = json.dumps(
+            _redact_response_value(parsed), ensure_ascii=False, separators=(",", ":")
+        )
+    text = re.sub(
+        r'(?i)(["\']?(?:password|git_password|token|secret|authorization)["\']?\s*[:=]\s*["\']?)[^"\'\s,;}]*',
+        r"\1<redacted>",
+        text,
+    )
+    text = text.replace("\r", "\\r").replace("\n", "\\n")
+    if len(text) > MAX_RESPONSE_PREVIEW_BYTES:
+        return text[:MAX_RESPONSE_PREVIEW_BYTES] + "...<truncated>"
+    return text
+
+
+def _api_progress(action, status, body):
+    message = "api action=" + action + " http_status=" + str(status)
+    if HELPER_PHASE == "init":
+        message += " response=" + _response_preview(body)
+    _progress(message)
 
 
 def _safe_protocol_value(value):
@@ -444,7 +503,6 @@ def _credential_store(operation, fields):
             ["git", "credential-store", "--file", CREDENTIAL_FILE, operation],
             input=payload,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
             timeout=10,
             check=False,
         )
@@ -619,7 +677,6 @@ def _git_config_value(key):
         completed = subprocess.run(
             ["git", "config", "--global", "--get", key],
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
             timeout=10,
             check=False,
         )
@@ -647,8 +704,6 @@ def _write_git_identity(username, email):
         for key, value in (("user.name", username), ("user.email", email)):
             completed = subprocess.run(
                 ["git", "config", "--global", "--replace-all", key, value],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
                 timeout=10,
                 check=False,
             )
@@ -764,7 +819,7 @@ def _request(method, action, payload=None, read_body=True):
         with HTTP_CLIENT.open(request, timeout=request_timeout) as response:
             status = response.getcode()
             body = response.read(MAX_RESPONSE_BYTES) if read_body else b""
-            _progress("api action=" + action + " http_status=" + str(status))
+            _api_progress(action, status, body)
             return status, body
     except HTTPError as error:
         body = b""
@@ -773,7 +828,7 @@ def _request(method, action, payload=None, read_body=True):
                 body = error.read(MAX_RESPONSE_BYTES)
             except OSError:
                 body = b""
-        _progress("api action=" + action + " http_status=" + str(error.code))
+        _api_progress(action, error.code, body)
         return error.code, body
     except (OSError, URLError, TimeoutError, ValueError):
         _progress("api action=" + action + " transport_failed")
@@ -1149,7 +1204,7 @@ if ! cp "$GIT_INIT_HELPER" "$GIT_RUNTIME_HELPER_TEMP" || ! chmod 0700 "$GIT_RUNT
     echo "[start] 运行 helper 生成失败" >&2
     exit 1
 fi
-if ! "$GIT_INIT_HELPER" --normalize-extra </dev/null >/dev/null 2>&1; then
+if ! "$GIT_INIT_HELPER" --normalize-extra; then
     echo "[start] Git 身份文件整理失败" >&2
     exit 1
 fi
@@ -1157,16 +1212,16 @@ echo "[start] Git helper 和本地凭证文件准备完成"
 
 # 初始化 clone 前只启用初始化 helper，避免运行期询问逻辑提前触发。
 # 先清除已有全局 helper，确保 Git 不会并行调用其他凭证来源。
-git config --global --unset-all credential.helper >/dev/null 2>&1 || true
-if ! git config --global credential.helper "$GIT_INIT_HELPER" >/dev/null 2>&1; then
+git config --global --unset-all credential.helper || true
+if ! git config --global credential.helper "$GIT_INIT_HELPER"; then
     echo "[start] 初始化 helper 全局配置失败" >&2
     exit 1
 fi
 echo "[start] 初始化 credential helper 已启用"
 
-if ! "$GIT_INIT_HELPER" --report starting </dev/null >/dev/null 2>&1; then
+if ! "$GIT_INIT_HELPER" --report starting; then
     echo "[start] Git starting 状态上报失败" >&2
-    "$GIT_INIT_HELPER" --report failed_service </dev/null >/dev/null 2>&1 || true
+    "$GIT_INIT_HELPER" --report failed_service || true
     exit 1
 fi
 echo "[start] Git 状态 starting 已上报"
@@ -1183,7 +1238,7 @@ if [ -z "$GITEE_URL" ] && [ -z "$GITEE_USER" ] && [ -z "$GITEE_REPOSITORY" ]; th
 else
     if [ -z "$GITEE_URL" ] || [ -z "$GITEE_USER" ] || [ -z "$GITEE_REPOSITORY" ]; then
         echo "[start] 码云地址配置不完整" >&2
-        "$GIT_INIT_HELPER" --report failed_initialize </dev/null >/dev/null 2>&1 || true
+        "$GIT_INIT_HELPER" --report failed_initialize || true
         exit 1
     fi
     if ! GIT_URL=$(python3 - "$GITEE_URL" "$GITEE_USER" "$GITEE_REPOSITORY" "$GITEE_BRANCH" <<'PY'
@@ -1253,7 +1308,7 @@ else:
 PY
 ); then
         echo "[start] 码云地址或路径字段非法" >&2
-        "$GIT_INIT_HELPER" --report failed_initialize </dev/null >/dev/null 2>&1 || true
+        "$GIT_INIT_HELPER" --report failed_initialize || true
         exit 1
     fi
     echo "[start] 码云配置和码云地址校验通过"
@@ -1261,69 +1316,68 @@ fi
 
 if [ -z "$GIT_URL" ]; then
     # 没有仓库配置时跳过 clone 和凭证 API，直接完成初始化状态上报。
-    if ! git config --global --unset-all credential.helper >/dev/null 2>&1; then
+    if ! git config --global --unset-all credential.helper; then
         :
     fi
-    if ! git config --global credential.helper "$GIT_RUNTIME_HELPER" >/dev/null 2>&1; then
+    if ! git config --global credential.helper "$GIT_RUNTIME_HELPER"; then
         echo "[start] 运行 helper 全局配置失败" >&2
-        "$GIT_INIT_HELPER" --report failed_initialize </dev/null >/dev/null 2>&1 || true
+        "$GIT_INIT_HELPER" --report failed_initialize || true
         exit 1
     fi
 else
     # 完整仓库配置才允许接管 /app，并在 clone 前上报 processing。
     if [ ! -d "$GIT_APP_DIR" ]; then
         echo "[start] /app 不是目录" >&2
-        "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+        "$GIT_INIT_HELPER" --report failed_container || true
         exit 1
     fi
     if ! cd "$GIT_APP_DIR"; then
         echo "[start] 无法进入 /app" >&2
-        "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+        "$GIT_INIT_HELPER" --report failed_container || true
         exit 1
     fi
     if ! GIT_APP_BASELINE=$(find "$GIT_APP_DIR" -mindepth 1 -maxdepth 1 -print); then
         echo "[start] /app 内容检查失败" >&2
-        "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+        "$GIT_INIT_HELPER" --report failed_container || true
         exit 1
     fi
     if [ -n "$GIT_APP_BASELINE" ]; then
         echo "[start] /app 非空，停止 Git 初始化" >&2
-        "$GIT_INIT_HELPER" --report failed_initialize </dev/null >/dev/null 2>&1 || true
+        "$GIT_INIT_HELPER" --report failed_initialize || true
         exit 1
     fi
     echo "[start] /app 已确认为空"
-    if ! "$GIT_INIT_HELPER" --report processing </dev/null >/dev/null 2>&1; then
+    if ! "$GIT_INIT_HELPER" --report processing; then
         echo "[start] Git processing 状态上报失败" >&2
-        "$GIT_INIT_HELPER" --report failed_service </dev/null >/dev/null 2>&1 || true
+        "$GIT_INIT_HELPER" --report failed_service || true
         exit 1
     fi
     echo "[start] Git 状态 processing 已上报"
 
     if ! GIT_INIT_START_SECONDS=$(date +%s); then
         echo "[start] 初始化计时器不可用" >&2
-        "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+        "$GIT_INIT_HELPER" --report failed_container || true
         exit 1
     fi
     GIT_INIT_DEADLINE=$((GIT_INIT_START_SECONDS + GIT_INIT_TIMEOUT_SECONDS))
     export GIT_INIT_DEADLINE
     GIT_ATTEMPT=1
     GIT_CLONE_SUCCESS=0
-    GIT_ENV_DUMPED=0
     while [ "$GIT_ATTEMPT" -le "$GIT_MAX_ATTEMPTS" ]; do
         if ! GIT_NOW_SECONDS=$(date +%s); then
             echo "[start] 初始化计时器不可用" >&2
-            "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+            "$GIT_INIT_HELPER" --report failed_container || true
             exit 1
         fi
         if [ "$GIT_NOW_SECONDS" -ge "$GIT_INIT_DEADLINE" ]; then
             echo "[start] Git 初始化超时" >&2
-            "$GIT_INIT_HELPER" --report failed_timeout </dev/null >/dev/null 2>&1 || true
+            "$GIT_INIT_HELPER" --report failed_timeout || true
             exit 1
         fi
         GIT_REMAINING_SECONDS=$((GIT_INIT_DEADLINE - GIT_NOW_SECONDS))
         if [ "$GIT_REMAINING_SECONDS" -lt 1 ]; then
             echo "[start] Git 初始化超时" >&2
-            "$GIT_INIT_HELPER" --report failed_timeout </dev/null >/dev/null 2>&1 || true
+            "$GIT_INIT_HELPER" --report failed_timeout || true
             exit 1
         fi
 
@@ -1346,27 +1400,18 @@ else
         fi
         if [ "$GIT_CLONE_OK" -eq 1 ]; then
             GIT_CLONE_SUCCESS=1
+            # clone captures helper stderr; surface initialization API responses even on success.
+            if [ -n "$GIT_CLONE_OUTPUT" ]; then
+                if ! printf '%s\n' "$GIT_CLONE_OUTPUT" |
+                    LC_ALL=C awk '/git credential helper progress: phase=init api action=/ { print "[start] 初始化 helper 响应: " $0 }' >&2; then
+                    echo "[start] 初始化 helper 响应输出失败" >&2
+                fi
+            fi
             unset GIT_CLONE_OUTPUT
             echo "[start] Git clone 完成"
             break
         fi
         echo "[start] Git clone 失败：attempt=$GIT_ATTEMPT/$GIT_MAX_ATTEMPTS exit=$GIT_CLONE_STATUS" >&2
-        if [ "$GIT_ENV_DUMPED" -eq 0 ]; then
-            echo "[start] Git clone 失败时的环境变量" >&2
-            if ! env | LC_ALL=C sort | LC_ALL=C awk -F= '
-                {
-                    variable_name = tolower($1)
-                    if (variable_name ~ /password/) {
-                        print "[start] 环境变量: " $1 "=<redacted>"
-                    } else {
-                        print "[start] 环境变量: " $0
-                    }
-                }' >&2; then
-                echo "[start] Git clone 失败时环境变量输出失败" >&2
-            fi
-            echo "[start] Git clone 失败时环境变量结束" >&2
-            GIT_ENV_DUMPED=1
-        fi
         if [ -n "$GIT_CLONE_OUTPUT" ]; then
             echo "[start] Git clone 详细诊断开始 (地址、凭证和敏感字段已脱敏)" >&2
             printf '%s\n' "$GIT_CLONE_OUTPUT" |
@@ -1408,51 +1453,51 @@ else
         if [ -n "$GIT_APP_BASELINE" ]; then
             echo "[start] 无法确认失败 clone 的文件归属" >&2
             unset GIT_CLONE_OUTPUT
-            "$GIT_INIT_HELPER" --report failed_initialize </dev/null >/dev/null 2>&1 || true
+            "$GIT_INIT_HELPER" --report failed_initialize || true
             exit 1
         fi
         if ! GIT_APP_REMAINDER=$(find "$GIT_APP_DIR" -mindepth 1 -maxdepth 1 -print -quit); then
             echo "[start] 失败 clone 清理校验失败" >&2
             unset GIT_CLONE_OUTPUT
-            "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+            "$GIT_INIT_HELPER" --report failed_container || true
             exit 1
         fi
         if [ -n "$GIT_APP_REMAINDER" ]; then
             if [ -L "$GIT_APP_DIR/.git" ] || { [ ! -d "$GIT_APP_DIR/.git" ] && [ ! -f "$GIT_APP_DIR/.git" ]; }; then
                 echo "[start] 无法确认失败 clone 的文件归属" >&2
                 unset GIT_CLONE_OUTPUT
-                "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+                "$GIT_INIT_HELPER" --report failed_container || true
                 exit 1
             fi
-            if ! GIT_APP_GIT_STATUS=$(git -C "$GIT_APP_DIR" status --porcelain=v1 --untracked-files=all --ignored=matching 2>/dev/null); then
+            if ! GIT_APP_GIT_STATUS=$(git -C "$GIT_APP_DIR" status --porcelain=v1 --untracked-files=all --ignored=matching); then
                 echo "[start] 无法确认失败 clone 的文件归属" >&2
                 unset GIT_CLONE_OUTPUT
-                "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+                "$GIT_INIT_HELPER" --report failed_container || true
                 exit 1
             fi
             if [ -n "$GIT_APP_GIT_STATUS" ]; then
                 echo "[start] 失败 clone 包含未确认内容" >&2
                 unset GIT_CLONE_OUTPUT GIT_APP_GIT_STATUS
-                "$GIT_INIT_HELPER" --report failed_initialize </dev/null >/dev/null 2>&1 || true
+                "$GIT_INIT_HELPER" --report failed_initialize || true
                 exit 1
             fi
             if ! GIT_APP_EMPTY_DIR=$(find "$GIT_APP_DIR" -mindepth 1 -type d -empty ! -path "$GIT_APP_DIR/.git" ! -path "$GIT_APP_DIR/.git/*" -print -quit); then
                 echo "[start] 失败 clone 清理校验失败" >&2
                 unset GIT_CLONE_OUTPUT GIT_APP_GIT_STATUS
-                "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+                "$GIT_INIT_HELPER" --report failed_container || true
                 exit 1
             fi
             if [ -n "$GIT_APP_EMPTY_DIR" ]; then
                 echo "[start] 失败 clone 包含未确认目录" >&2
                 unset GIT_CLONE_OUTPUT GIT_APP_GIT_STATUS GIT_APP_EMPTY_DIR
-                "$GIT_INIT_HELPER" --report failed_initialize </dev/null >/dev/null 2>&1 || true
+                "$GIT_INIT_HELPER" --report failed_initialize || true
                 exit 1
             fi
             while IFS= read -r -d '' GIT_APP_ENTRY; do
                 if ! rm -rf -- "$GIT_APP_ENTRY"; then
                     echo "[start] 失败 clone 清理失败" >&2
                     unset GIT_CLONE_OUTPUT GIT_APP_GIT_STATUS
-                    "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+                    "$GIT_INIT_HELPER" --report failed_container || true
                     exit 1
                 fi
             done < <(find "$GIT_APP_DIR" -mindepth 1 -maxdepth 1 -print0)
@@ -1461,38 +1506,38 @@ else
         if [[ "$GIT_URL" == git://* || "$GIT_URL" == git@*:* ]]; then
             unset GIT_CLONE_OUTPUT
             echo "[start] 非 HTTP Git clone 失败，停止重试" >&2
-            "$GIT_INIT_HELPER" --report failed_git </dev/null >/dev/null 2>&1 || true
+            "$GIT_INIT_HELPER" --report failed_git || true
             exit 1
         fi
         GIT_CLONE_OUTPUT_LOWER="${GIT_CLONE_OUTPUT,,}"
         if [ "$GIT_CLONE_STATUS" -eq 124 ] || [[ "$GIT_CLONE_OUTPUT_LOWER" == *"credential helper error: timeout"* ]] || [[ "$GIT_CLONE_OUTPUT_LOWER" == *"timed out"* ]]; then
             unset GIT_CLONE_OUTPUT GIT_CLONE_OUTPUT_LOWER
             echo "[start] Git clone 初始化超时" >&2
-            "$GIT_INIT_HELPER" --report failed_timeout </dev/null >/dev/null 2>&1 || true
+            "$GIT_INIT_HELPER" --report failed_timeout || true
             exit 1
         fi
         if [[ "$GIT_CLONE_OUTPUT_LOWER" == *"credential helper error: max_attempts"* ]]; then
             unset GIT_CLONE_OUTPUT GIT_CLONE_OUTPUT_LOWER
             echo "[start] 凭证获取达到重试上限" >&2
-            "$GIT_INIT_HELPER" --report failed_max_attempts </dev/null >/dev/null 2>&1 || true
+            "$GIT_INIT_HELPER" --report failed_max_attempts || true
             exit 1
         fi
         if [[ "$GIT_CLONE_OUTPUT_LOWER" == *"credential helper error: service"* ]] || [[ "$GIT_CLONE_OUTPUT_LOWER" == *"credential helper error: unauthorized"* ]] || [[ "$GIT_CLONE_OUTPUT_LOWER" == *"credential helper error: not_found"* ]]; then
             unset GIT_CLONE_OUTPUT GIT_CLONE_OUTPUT_LOWER
             echo "[start] 码云凭证服务处理失败" >&2
-            "$GIT_INIT_HELPER" --report failed_service </dev/null >/dev/null 2>&1 || true
+            "$GIT_INIT_HELPER" --report failed_service || true
             exit 1
         fi
         if [[ "$GIT_CLONE_OUTPUT_LOWER" == *"credential helper error: unexpected_state"* ]] || [[ "$GIT_CLONE_OUTPUT_LOWER" == *"credential helper error: invalid_credential"* ]]; then
             unset GIT_CLONE_OUTPUT GIT_CLONE_OUTPUT_LOWER
             echo "[start] 码云凭证状态异常" >&2
-            "$GIT_INIT_HELPER" --report failed_unexpected_state </dev/null >/dev/null 2>&1 || true
+            "$GIT_INIT_HELPER" --report failed_unexpected_state || true
             exit 1
         fi
         if [[ "$GIT_CLONE_OUTPUT_LOWER" == *"credential helper error: local"* ]] || [[ "$GIT_CLONE_OUTPUT_LOWER" == *"credential helper error: internal"* ]]; then
             unset GIT_CLONE_OUTPUT GIT_CLONE_OUTPUT_LOWER
             echo "[start] 码云本地凭证处理失败" >&2
-            "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+            "$GIT_INIT_HELPER" --report failed_container || true
             exit 1
         fi
         if [[ "$GIT_CLONE_OUTPUT_LOWER" == *"credential helper error: remote_failed"* ]]; then
@@ -1508,7 +1553,7 @@ else
             || [[ "$GIT_CLONE_OUTPUT_LOWER" == *"does not appear to be a git repository"* ]]; then
             unset GIT_CLONE_OUTPUT GIT_CLONE_OUTPUT_LOWER
             echo "[start] Git clone 返回不可恢复错误" >&2
-            "$GIT_INIT_HELPER" --report failed_git </dev/null >/dev/null 2>&1 || true
+            "$GIT_INIT_HELPER" --report failed_git || true
             exit 1
         fi
 
@@ -1538,24 +1583,24 @@ else
             && [[ "$GIT_CLONE_OUTPUT_LOWER" != *"remote end hung up"* ]]; then
             unset GIT_CLONE_OUTPUT GIT_CLONE_OUTPUT_LOWER
             echo "[start] Git clone 返回不可分类错误" >&2
-            "$GIT_INIT_HELPER" --report failed_git </dev/null >/dev/null 2>&1 || true
+            "$GIT_INIT_HELPER" --report failed_git || true
             exit 1
         fi
         unset GIT_CLONE_OUTPUT GIT_CLONE_OUTPUT_LOWER
         if [ "$GIT_ATTEMPT" -ge "$GIT_MAX_ATTEMPTS" ]; then
             echo "[start] Git clone 达到重试上限" >&2
-            "$GIT_INIT_HELPER" --report failed_max_attempts </dev/null >/dev/null 2>&1 || true
+            "$GIT_INIT_HELPER" --report failed_max_attempts || true
             exit 1
         fi
         if ! GIT_NOW_SECONDS=$(date +%s); then
             echo "[start] 初始化计时器不可用" >&2
-            "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+            "$GIT_INIT_HELPER" --report failed_container || true
             exit 1
         fi
         GIT_SLEEP_SECONDS="$GIT_RETRY_DELAY_SECONDS"
         GIT_REMAINING_SECONDS=$((GIT_INIT_DEADLINE - GIT_NOW_SECONDS))
         if [ "$GIT_REMAINING_SECONDS" -le 0 ]; then
-            "$GIT_INIT_HELPER" --report failed_timeout </dev/null >/dev/null 2>&1 || true
+            "$GIT_INIT_HELPER" --report failed_timeout || true
             exit 1
         fi
         if [ "$GIT_SLEEP_SECONDS" -gt "$GIT_REMAINING_SECONDS" ]; then
@@ -1564,13 +1609,13 @@ else
         echo "[start] Git clone 将在 ${GIT_SLEEP_SECONDS} 秒后重试"
         if ! sleep "$GIT_SLEEP_SECONDS"; then
             echo "[start] Git 重试等待失败" >&2
-            "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+            "$GIT_INIT_HELPER" --report failed_container || true
             exit 1
         fi
         GIT_ATTEMPT=$((GIT_ATTEMPT + 1))
     done
     if [ "$GIT_CLONE_SUCCESS" -ne 1 ]; then
-        "$GIT_INIT_HELPER" --report failed_max_attempts </dev/null >/dev/null 2>&1 || true
+        "$GIT_INIT_HELPER" --report failed_max_attempts || true
         exit 1
     fi
 
@@ -1589,14 +1634,14 @@ else
             esac
         done < "$GIT_EXTRA_FILE"; then
             echo "[start] 码云身份文件读取失败" >&2
-            "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+            "$GIT_INIT_HELPER" --report failed_container || true
             exit 1
         fi
     fi
     if [ -n "$GIT_USERNAME" ]; then
-        if ! git config --global user.name "$GIT_USERNAME" >/dev/null 2>&1 || ! git config --global user.email "$GIT_EMAIL" >/dev/null 2>&1; then
+        if ! git config --global user.name "$GIT_USERNAME" || ! git config --global user.email "$GIT_EMAIL"; then
             echo "[start] 码云用户身份配置失败" >&2
-            "$GIT_INIT_HELPER" --report failed_initialize </dev/null >/dev/null 2>&1 || true
+            "$GIT_INIT_HELPER" --report failed_initialize || true
             exit 1
         fi
         echo "[start] 码云用户身份配置完成"
@@ -1605,22 +1650,22 @@ else
     fi
     if ! chmod 0600 "$GIT_CREDENTIAL_FILE" "$GIT_EXTRA_FILE"; then
         echo "[start] 码云本地文件权限校验失败" >&2
-        "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+        "$GIT_INIT_HELPER" --report failed_container || true
         exit 1
     fi
-    if [ "$(stat -c '%a' "$GIT_CREDENTIAL_FILE" 2>/dev/null)" != "600" ] || [ "$(stat -c '%a' "$GIT_EXTRA_FILE" 2>/dev/null)" != "600" ]; then
+    if [ "$(stat -c '%a' "$GIT_CREDENTIAL_FILE")" != "600" ] || [ "$(stat -c '%a' "$GIT_EXTRA_FILE")" != "600" ]; then
         echo "[start] 码云本地文件权限校验失败" >&2
-        "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+        "$GIT_INIT_HELPER" --report failed_container || true
         exit 1
     fi
     echo "[start] 码云本地凭证文件权限确认完成"
     # 初始化成功门禁：先切换 runtime helper，再确认服务端接受 initialized。
-    if ! git config --global --unset-all credential.helper >/dev/null 2>&1; then
+    if ! git config --global --unset-all credential.helper; then
         :
     fi
-    if ! git config --global credential.helper "$GIT_RUNTIME_HELPER" >/dev/null 2>&1; then
+    if ! git config --global credential.helper "$GIT_RUNTIME_HELPER"; then
         echo "[start] 运行 helper 全局配置失败" >&2
-        "$GIT_INIT_HELPER" --report failed_initialize </dev/null >/dev/null 2>&1 || true
+        "$GIT_INIT_HELPER" --report failed_initialize || true
         exit 1
     fi
     echo "[start] 运行期 credential helper 已启用"
@@ -1629,12 +1674,12 @@ fi
 # 运行期命令需要在认证失败后立即重跑一次；初始化阶段尚未安装此入口。
 if [ -L "$GIT_RUNTIME_WRAPPER" ] || { [ -e "$GIT_RUNTIME_WRAPPER" ] && [ ! -f "$GIT_RUNTIME_WRAPPER" ]; }; then
     echo "[start] 运行期 Git 入口类型非法" >&2
-    "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+    "$GIT_INIT_HELPER" --report failed_container || true
     exit 1
 fi
 if ! GIT_RUNTIME_WRAPPER_TEMP=$(mktemp "$GIT_HELPER_DIR/.runtime-git.XXXXXX"); then
     echo "[start] 运行期 Git 入口临时文件创建失败" >&2
-    "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+    "$GIT_INIT_HELPER" --report failed_container || true
     exit 1
 fi
 if ! cat > "$GIT_RUNTIME_WRAPPER_TEMP" <<'SH'
@@ -1685,7 +1730,7 @@ SH
 then
     rm -f -- "$GIT_RUNTIME_WRAPPER_TEMP" || true
     echo "[start] 运行期 Git 入口生成失败" >&2
-    "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+    "$GIT_INIT_HELPER" --report failed_container || true
     exit 1
 fi
 if ! sed -i \
@@ -1693,13 +1738,13 @@ if ! sed -i \
     "$GIT_RUNTIME_WRAPPER_TEMP" || ! chmod 0755 "$GIT_RUNTIME_WRAPPER_TEMP" || ! mv -fT -- "$GIT_RUNTIME_WRAPPER_TEMP" "$GIT_RUNTIME_WRAPPER"; then
     rm -f -- "$GIT_RUNTIME_WRAPPER_TEMP" || true
     echo "[start] 运行期 Git 入口安装失败" >&2
-    "$GIT_INIT_HELPER" --report failed_container </dev/null >/dev/null 2>&1 || true
+    "$GIT_INIT_HELPER" --report failed_container || true
     exit 1
 fi
 echo "[start] 运行期 Git 认证失败自动重试已启用"
-if ! "$GIT_INIT_HELPER" --report initialized </dev/null >/dev/null 2>&1; then
+if ! "$GIT_INIT_HELPER" --report initialized; then
     echo "[start] Git initialized 状态上报失败" >&2
-    "$GIT_INIT_HELPER" --report failed_initialize </dev/null >/dev/null 2>&1 || true
+    "$GIT_INIT_HELPER" --report failed_initialize || true
     exit 1
 fi
 echo "[start] Git 状态 initialized 已上报"
