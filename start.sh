@@ -1798,6 +1798,176 @@ case "${TESTAGENT_ENABLE_CHROME:-}" in
         ;;
 esac
 
+# sshd 为每个会话重新组装环境，不会自动继承父进程中的 TESTAGENT_* 变量。
+# 使用 SetEnv 让 22 端口和 connect-fix.sh 启动的额外 sshd 共享同一份环境配置。
+write_sshd_environment_config() {
+    local sshd_config=/etc/ssh/sshd_config
+    local sshd_config_dir=/etc/ssh/sshd_config.d
+    local sshd_environment_config="$sshd_config_dir/99-testagent-cloud-env.conf"
+    local sshd_environment_temp
+    local sshd_config_temp
+    local sshd_environment_entry
+    local sshd_environment_name
+    local sshd_environment_value
+    local sshd_environment_name_from_entry
+    local sshd_environment_value_from_entry
+    local sshd_fixed_name
+    local -a sshd_fixed_names=(
+        TESTAGENT_CLOUD_MODE
+        TESTAGENT_CLOUD_SERVICE_USER
+        TESTAGENT_CLOUD_SERVICE_ID
+        TESTAGENT_CLOUD_SERVICE_URL
+        TESTAGENT_CLOUD_GITEE_URL
+        TESTAGENT_CLOUD_GITEE_USER
+        TESTAGENT_CLOUD_GITEE_REPOSITORY
+        TESTAGENT_CLOUD_GITEE_BRANCH
+        TESTAGENT_CLOUD_PIP_URL
+        TESTAGENT_CLOUD_NPM_URL
+        TESTAGENT_CLOUD_CPU
+        TESTAGENT_CLOUD_MEMORY
+        TESTAGENT_ENABLE_CHROME
+    )
+    declare -A sshd_written_names=()
+
+    if [ ! -f "$sshd_config" ]; then
+        echo "[start] 未找到 SSHD 主配置: $sshd_config" >&2
+        return 1
+    fi
+    if [ -L "$sshd_config_dir" ]; then
+        echo "[start] SSHD drop-in 配置目录不能是符号链接" >&2
+        return 1
+    fi
+    if ! mkdir -p "$sshd_config_dir"; then
+        echo "[start] SSHD drop-in 配置目录创建失败" >&2
+        return 1
+    fi
+
+    # Ubuntu 默认配置包含这一行；若基础镜像变更导致缺失，启动时补到顶层。
+    if ! awk '
+        BEGIN { found = 0; in_match = 0 }
+        /^[[:space:]]*#/ { next }
+        {
+            directive = tolower($1)
+            if (directive == "match") {
+                in_match = 1
+            } else if (!in_match && directive == "include" && NF == 2 && $2 == "/etc/ssh/sshd_config.d/*.conf") {
+                found = 1
+            }
+        }
+        END { exit(found ? 0 : 1) }
+    ' "$sshd_config"; then
+        if ! sshd_config_temp=$(mktemp /etc/ssh/.sshd_config.XXXXXX); then
+            echo "[start] SSHD 主配置临时文件创建失败" >&2
+            return 1
+        fi
+        if ! {
+            printf '%s\n' 'Include /etc/ssh/sshd_config.d/*.conf'
+            cat "$sshd_config"
+        } > "$sshd_config_temp"; then
+            rm -f -- "$sshd_config_temp"
+            echo "[start] SSHD Include 配置写入失败" >&2
+            return 1
+        fi
+        if ! chmod --reference="$sshd_config" "$sshd_config_temp" || ! mv -f -- "$sshd_config_temp" "$sshd_config"; then
+            rm -f -- "$sshd_config_temp"
+            echo "[start] SSHD 主配置更新失败" >&2
+            return 1
+        fi
+    fi
+
+    if [ -L "$sshd_environment_config" ] || {
+        [ -e "$sshd_environment_config" ] && [ ! -f "$sshd_environment_config" ]
+    }; then
+        echo "[start] SSHD 环境配置文件类型非法" >&2
+        return 1
+    fi
+    if ! sshd_environment_temp=$(mktemp "$sshd_config_dir/.99-testagent-cloud-env.conf.XXXXXX"); then
+        echo "[start] SSHD 环境配置临时文件创建失败" >&2
+        return 1
+    fi
+    if ! chmod 0644 "$sshd_environment_temp"; then
+        rm -f -- "$sshd_environment_temp"
+        echo "[start] SSHD 环境配置权限设置失败" >&2
+        return 1
+    fi
+
+    # SetEnv 的值使用双引号包裹，并转义反斜杠和双引号；控制字符一律拒绝。
+    write_sshd_setenv() {
+        local output_file=$1
+        local environment_name=$2
+        local environment_value=$3
+        local escaped_value
+        local LC_ALL=C
+
+        if [[ ! "$environment_name" =~ ^TESTAGENT[A-Za-z0-9_]*$ ]]; then
+            echo "[start] 非法的 SSHD 环境变量名: $environment_name" >&2
+            return 1
+        fi
+        if [[ "$environment_value" == *[[:cntrl:]]* ]]; then
+            echo "[start] SSHD 环境变量包含控制字符: $environment_name" >&2
+            return 1
+        fi
+
+        escaped_value=${environment_value//\\/\\\\}
+        escaped_value=${escaped_value//\"/\\\"}
+        if [ -n "$escaped_value" ]; then
+            printf 'SetEnv %s="%s"\n' "$environment_name" "$escaped_value" >> "$output_file"
+        else
+            printf 'SetEnv %s=\n' "$environment_name" >> "$output_file"
+        fi
+    }
+
+    for sshd_fixed_name in "${sshd_fixed_names[@]}"; do
+        sshd_environment_value="${!sshd_fixed_name}"
+        if ! write_sshd_setenv "$sshd_environment_temp" "$sshd_fixed_name" "$sshd_environment_value"; then
+            rm -f -- "$sshd_environment_temp"
+            return 1
+        fi
+        sshd_written_names["$sshd_fixed_name"]=1
+    done
+
+    # 保留未来新增的 TESTAGENT_* 变量；env -0 可安全读取值中的普通空格。
+    while IFS= read -r -d '' sshd_environment_entry; do
+        sshd_environment_name_from_entry=${sshd_environment_entry%%=*}
+        case "$sshd_environment_name_from_entry" in
+            TESTAGENT*)
+                ;;
+            *)
+                continue
+                ;;
+        esac
+        if [[ ! "$sshd_environment_name_from_entry" =~ ^TESTAGENT[A-Za-z0-9_]*$ ]]; then
+            echo "[start] 非法的 SSHD 环境变量名: $sshd_environment_name_from_entry" >&2
+            rm -f -- "$sshd_environment_temp"
+            return 1
+        fi
+        if [[ -n "${sshd_written_names[$sshd_environment_name_from_entry]+x}" ]]; then
+            continue
+        fi
+        sshd_environment_value_from_entry=${sshd_environment_entry#*=}
+        if ! write_sshd_setenv "$sshd_environment_temp" "$sshd_environment_name_from_entry" "$sshd_environment_value_from_entry"; then
+            rm -f -- "$sshd_environment_temp"
+            return 1
+        fi
+        sshd_written_names["$sshd_environment_name_from_entry"]=1
+    done < <(env -0)
+
+    if ! mv -f -- "$sshd_environment_temp" "$sshd_environment_config"; then
+        rm -f -- "$sshd_environment_temp"
+        echo "[start] SSHD 环境配置安装失败" >&2
+        return 1
+    fi
+    if ! /usr/sbin/sshd -t; then
+        echo "[start] SSHD 配置校验失败" >&2
+        return 1
+    fi
+    echo "[start] SSHD TESTAGENT 环境配置已生成并通过校验"
+}
+
+if ! write_sshd_environment_config; then
+    exit 1
+fi
+
 # 启动 SSH 服务
 if [ "$#" -eq 0 ]; then
     set -- /usr/sbin/sshd -D -e
