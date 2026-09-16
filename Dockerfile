@@ -11,6 +11,11 @@ ARG TSCODE_SERVER_DATA_DIR=/root/.tscode-server
 
 ARG DEBIAN_FRONTEND=noninteractive
 
+# 固定为 UTF-8 locale，避免 Java 在 POSIX locale 下把 file.encoding 退化为
+# ANSI_X3.4-1968(ASCII)，导致中文日志写入文件后乱码
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
 # 验证编译环境位于 X64 环境下
 RUN dpkg --print-architecture | grep -qx amd64
 
