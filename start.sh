@@ -10,7 +10,7 @@ ssh-keygen -A
 # --- Start ---
 
 # 接下来的初始化流程的总可用时间
-GIT_INIT_TIMEOUT_SECONDS=900
+GIT_INIT_TIMEOUT_SECONDS=600
 
 # 获取 git 凭证允许主动尝试的最大次数。
 GIT_MAX_ATTEMPTS=10
