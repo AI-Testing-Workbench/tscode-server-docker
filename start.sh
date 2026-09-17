@@ -40,7 +40,7 @@ GIT_RUNTIME_REJECTED_FILE=/root/.git-helper/.runtime-credential-rejected
 # 运行期 Git 命令入口；初始化完成前不放入 PATH。
 GIT_RUNTIME_WRAPPER=/usr/local/bin/git
 
-# Gitee 仓库必须直接 clone 到的工作目录。
+# Gitee 仓库 clone 时使用的父工作目录。
 GIT_APP_DIR=/app
 
 # 云端模式变量缺失时停止；存在但不是 1 时跳过云端初始化流程。
@@ -1311,6 +1311,7 @@ PY
         "$GIT_INIT_HELPER" --report failed_initialize || true
         exit 1
     fi
+    GIT_APP_CLONE_DIR="$GIT_APP_DIR/$GITEE_REPOSITORY"
     echo "[start] 码云配置和码云地址校验通过"
 fi
 
@@ -1325,7 +1326,7 @@ if [ -z "$GIT_URL" ]; then
         exit 1
     fi
 else
-    # 完整仓库配置才允许接管 /app，并在 clone 前上报 processing。
+    # 完整仓库配置才允许接管 /app，并在其中创建仓库目录；clone 前上报 processing。
     if [ ! -d "$GIT_APP_DIR" ]; then
         echo "[start] /app 不是目录" >&2
         "$GIT_INIT_HELPER" --report failed_container || true
@@ -1386,13 +1387,13 @@ else
         GIT_CLONE_OK=0
         echo "[start] Git clone 第 $GIT_ATTEMPT/$GIT_MAX_ATTEMPTS 次尝试"
         if [ -n "$GITEE_BRANCH" ]; then
-            if GIT_CLONE_OUTPUT=$(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= SSH_ASKPASS= GIT_CONFIG_NOSYSTEM=1 LC_ALL=C timeout --signal=TERM "$GIT_REMAINING_SECONDS" git clone --branch "$GITEE_BRANCH" "$GIT_URL" . 2>&1); then
+            if GIT_CLONE_OUTPUT=$(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= SSH_ASKPASS= GIT_CONFIG_NOSYSTEM=1 LC_ALL=C timeout --signal=TERM "$GIT_REMAINING_SECONDS" git clone --branch "$GITEE_BRANCH" "$GIT_URL" 2>&1); then
                 GIT_CLONE_OK=1
             else
                 GIT_CLONE_STATUS=$?
             fi
         else
-            if GIT_CLONE_OUTPUT=$(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= SSH_ASKPASS= GIT_CONFIG_NOSYSTEM=1 LC_ALL=C timeout --signal=TERM "$GIT_REMAINING_SECONDS" git clone "$GIT_URL" . 2>&1); then
+            if GIT_CLONE_OUTPUT=$(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= SSH_ASKPASS= GIT_CONFIG_NOSYSTEM=1 LC_ALL=C timeout --signal=TERM "$GIT_REMAINING_SECONDS" git clone "$GIT_URL" 2>&1); then
                 GIT_CLONE_OK=1
             else
                 GIT_CLONE_STATUS=$?
@@ -1448,7 +1449,7 @@ else
             echo "[start] Git clone 未返回详细诊断输出" >&2
         fi
 
-        # 只清理已确认属于本次 clone 的内容；基线或 Git 归属异常时拒绝删除。
+        # 只清理已确认属于本次 clone 的仓库目录；基线或 Git 归属异常时拒绝删除。
         # Git 状态必须没有未跟踪项，空目录也必须不存在，才能执行删除。
         if [ -n "$GIT_APP_BASELINE" ]; then
             echo "[start] 无法确认失败 clone 的文件归属" >&2
@@ -1463,13 +1464,19 @@ else
             exit 1
         fi
         if [ -n "$GIT_APP_REMAINDER" ]; then
-            if [ -L "$GIT_APP_DIR/.git" ] || { [ ! -d "$GIT_APP_DIR/.git" ] && [ ! -f "$GIT_APP_DIR/.git" ]; }; then
+            if [ "$GIT_APP_REMAINDER" != "$GIT_APP_CLONE_DIR" ]; then
                 echo "[start] 无法确认失败 clone 的文件归属" >&2
                 unset GIT_CLONE_OUTPUT
                 "$GIT_INIT_HELPER" --report failed_container || true
                 exit 1
             fi
-            if ! GIT_APP_GIT_STATUS=$(git -C "$GIT_APP_DIR" status --porcelain=v1 --untracked-files=all --ignored=matching); then
+            if [ -L "$GIT_APP_CLONE_DIR" ] || [ ! -d "$GIT_APP_CLONE_DIR" ]; then
+                echo "[start] 无法确认失败 clone 的文件归属" >&2
+                unset GIT_CLONE_OUTPUT
+                "$GIT_INIT_HELPER" --report failed_container || true
+                exit 1
+            fi
+            if ! GIT_APP_GIT_STATUS=$(git -C "$GIT_APP_CLONE_DIR" status --porcelain=v1 --untracked-files=all --ignored=matching); then
                 echo "[start] 无法确认失败 clone 的文件归属" >&2
                 unset GIT_CLONE_OUTPUT
                 "$GIT_INIT_HELPER" --report failed_container || true
@@ -1481,7 +1488,7 @@ else
                 "$GIT_INIT_HELPER" --report failed_initialize || true
                 exit 1
             fi
-            if ! GIT_APP_EMPTY_DIR=$(find "$GIT_APP_DIR" -mindepth 1 -type d -empty ! -path "$GIT_APP_DIR/.git" ! -path "$GIT_APP_DIR/.git/*" -print -quit); then
+            if ! GIT_APP_EMPTY_DIR=$(find "$GIT_APP_DIR" -mindepth 1 -type d -empty ! -path "$GIT_APP_CLONE_DIR" ! -path "$GIT_APP_CLONE_DIR/.git" ! -path "$GIT_APP_CLONE_DIR/.git/*" -print -quit); then
                 echo "[start] 失败 clone 清理校验失败" >&2
                 unset GIT_CLONE_OUTPUT GIT_APP_GIT_STATUS
                 "$GIT_INIT_HELPER" --report failed_container || true
@@ -1493,14 +1500,12 @@ else
                 "$GIT_INIT_HELPER" --report failed_initialize || true
                 exit 1
             fi
-            while IFS= read -r -d '' GIT_APP_ENTRY; do
-                if ! rm -rf -- "$GIT_APP_ENTRY"; then
-                    echo "[start] 失败 clone 清理失败" >&2
-                    unset GIT_CLONE_OUTPUT GIT_APP_GIT_STATUS
-                    "$GIT_INIT_HELPER" --report failed_container || true
-                    exit 1
-                fi
-            done < <(find "$GIT_APP_DIR" -mindepth 1 -maxdepth 1 -print0)
+            if ! rm -rf -- "$GIT_APP_CLONE_DIR"; then
+                echo "[start] 失败 clone 清理失败" >&2
+                unset GIT_CLONE_OUTPUT GIT_APP_GIT_STATUS
+                "$GIT_INIT_HELPER" --report failed_container || true
+                exit 1
+            fi
         fi
 
         if [[ "$GIT_URL" == git://* || "$GIT_URL" == git@*:* ]]; then
