@@ -1809,25 +1809,7 @@ write_sshd_environment_config() {
     local sshd_environment_entry
     local sshd_environment_name
     local sshd_environment_value
-    local sshd_environment_name_from_entry
-    local sshd_environment_value_from_entry
-    local sshd_fixed_name
-    local -a sshd_fixed_names=(
-        TESTAGENT_CLOUD_MODE
-        TESTAGENT_CLOUD_SERVICE_USER
-        TESTAGENT_CLOUD_SERVICE_ID
-        TESTAGENT_CLOUD_SERVICE_URL
-        TESTAGENT_CLOUD_GITEE_URL
-        TESTAGENT_CLOUD_GITEE_USER
-        TESTAGENT_CLOUD_GITEE_REPOSITORY
-        TESTAGENT_CLOUD_GITEE_BRANCH
-        TESTAGENT_CLOUD_PIP_URL
-        TESTAGENT_CLOUD_NPM_URL
-        TESTAGENT_CLOUD_CPU
-        TESTAGENT_CLOUD_MEMORY
-        TESTAGENT_ENABLE_CHROME
-    )
-    declare -A sshd_written_names=()
+    local sshd_setenv_line='SetEnv'
 
     if [ ! -f "$sshd_config" ]; then
         echo "[start] 未找到 SSHD 主配置: $sshd_config" >&2
@@ -1893,9 +1875,8 @@ write_sshd_environment_config() {
 
     # SetEnv 的值使用双引号包裹，并转义反斜杠和双引号；控制字符一律拒绝。
     write_sshd_setenv() {
-        local output_file=$1
-        local environment_name=$2
-        local environment_value=$3
+        local environment_name=$1
+        local environment_value=$2
         local escaped_value
         local LC_ALL=C
 
@@ -1910,48 +1891,36 @@ write_sshd_environment_config() {
 
         escaped_value=${environment_value//\\/\\\\}
         escaped_value=${escaped_value//\"/\\\"}
-        if [ -n "$escaped_value" ]; then
-            printf 'SetEnv %s="%s"\n' "$environment_name" "$escaped_value" >> "$output_file"
-        else
-            printf 'SetEnv %s=\n' "$environment_name" >> "$output_file"
-        fi
+        sshd_setenv_line+=" ${environment_name}=\"${escaped_value}\""
     }
 
-    for sshd_fixed_name in "${sshd_fixed_names[@]}"; do
-        sshd_environment_value="${!sshd_fixed_name}"
-        if ! write_sshd_setenv "$sshd_environment_temp" "$sshd_fixed_name" "$sshd_environment_value"; then
-            rm -f -- "$sshd_environment_temp"
-            return 1
-        fi
-        sshd_written_names["$sshd_fixed_name"]=1
-    done
-
-    # 保留未来新增的 TESTAGENT_* 变量；env -0 可安全读取值中的普通空格。
+    # 只保留当前环境中符合命名规则的变量；env -0 可安全读取值中的普通空格。
     while IFS= read -r -d '' sshd_environment_entry; do
-        sshd_environment_name_from_entry=${sshd_environment_entry%%=*}
-        case "$sshd_environment_name_from_entry" in
+        sshd_environment_name=${sshd_environment_entry%%=*}
+        case "$sshd_environment_name" in
             TESTAGENT*)
                 ;;
             *)
                 continue
                 ;;
         esac
-        if [[ ! "$sshd_environment_name_from_entry" =~ ^TESTAGENT[A-Za-z0-9_]*$ ]]; then
-            echo "[start] 非法的 SSHD 环境变量名: $sshd_environment_name_from_entry" >&2
+        if [[ ! "$sshd_environment_name" =~ ^TESTAGENT[A-Za-z0-9_]*$ ]]; then
+            echo "[start] 非法的 SSHD 环境变量名: $sshd_environment_name" >&2
             rm -f -- "$sshd_environment_temp"
             return 1
         fi
-        if [[ -n "${sshd_written_names[$sshd_environment_name_from_entry]+x}" ]]; then
-            continue
-        fi
-        sshd_environment_value_from_entry=${sshd_environment_entry#*=}
-        if ! write_sshd_setenv "$sshd_environment_temp" "$sshd_environment_name_from_entry" "$sshd_environment_value_from_entry"; then
+        sshd_environment_value=${sshd_environment_entry#*=}
+        if ! write_sshd_setenv "$sshd_environment_name" "$sshd_environment_value"; then
             rm -f -- "$sshd_environment_temp"
             return 1
         fi
-        sshd_written_names["$sshd_environment_name_from_entry"]=1
     done < <(env -0)
 
+    if ! printf '%s\n' "$sshd_setenv_line" > "$sshd_environment_temp"; then
+        rm -f -- "$sshd_environment_temp"
+        echo "[start] SSHD 环境配置写入失败" >&2
+        return 1
+    fi
     if ! mv -f -- "$sshd_environment_temp" "$sshd_environment_config"; then
         rm -f -- "$sshd_environment_temp"
         echo "[start] SSHD 环境配置安装失败" >&2
