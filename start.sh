@@ -843,13 +843,21 @@ def _json_object(body):
     return value if isinstance(value, dict) else None
 
 
-def _report_status(status):
+def _report_status(status, retry_on_conflict=False):
     # A report is accepted only when the server echoes the requested state.
     if status not in REPORT_STATES:
         return False
     response_status, body = _request(
         "POST", "report", {"git_status": status}, read_body=True
     )
+    if retry_on_conflict and response_status == 409:
+        for _ in range(3):
+            time.sleep(3)
+            response_status, body = _request(
+                "POST", "report", {"git_status": status}, read_body=True
+            )
+            if response_status != 409:
+                break
     if response_status != 200:
         return False
     response = _json_object(body)
@@ -1153,7 +1161,9 @@ def _main():
             return 1
         return 0
     if operation == "--report":
-        if len(sys.argv) != 3 or not _report_status(sys.argv[2]):
+        if len(sys.argv) != 3 or not _report_status(
+            sys.argv[2], retry_on_conflict=sys.argv[2] == "starting"
+        ):
             _error("service")
             return 1
         return 0
