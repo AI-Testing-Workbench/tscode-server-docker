@@ -407,6 +407,51 @@ def _credential_protocol(fields):
     return "".join(lines).encode("utf-8", "surrogateescape")
 
 
+def _credential_refresh_status():
+    if os.environ.get("GIT_CREDENTIAL_REFRESH") != "1":
+        return None
+    status = os.environ.get("GIT_CREDENTIAL_REFRESH_STATUS", "credential_required")
+    if status not in {"credential_required", "credential_rejected"}:
+        return "credential_required"
+    return status
+
+
+def _mark_credential_event(event):
+    path = os.environ.get("GIT_CREDENTIAL_EVENT_FILE", "")
+    if not path or not _safe_protocol_value(path):
+        return True
+    directory = str(Path(path).parent)
+    file_descriptor = None
+    temporary_path = None
+    try:
+        file_descriptor, temporary_path = tempfile.mkstemp(
+            prefix=".credential-event.", dir=directory
+        )
+        os.fchmod(file_descriptor, 0o600)
+        with os.fdopen(file_descriptor, "w", encoding="ascii", newline="\n") as stream:
+            file_descriptor = None
+            stream.write(event + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+        os.chmod(path, 0o600)
+        return True
+    except (OSError, ValueError):
+        return False
+    finally:
+        if file_descriptor is not None:
+            try:
+                os.close(file_descriptor)
+            except OSError:
+                pass
+        if temporary_path is not None:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+
+
 def _regular_file(path):
     try:
         if os.path.islink(path):
@@ -754,6 +799,9 @@ def _output_credential(request, stored):
         sys.stdout.write("username=" + username + "\n")
     sys.stdout.write("password=" + password + "\n\n")
     sys.stdout.flush()
+    if not _mark_credential_event("credential_provided"):
+        return False
+    _progress("credential provided")
     return True
 
 
@@ -844,6 +892,8 @@ def _json_object(body):
 
 
 def _report_status(status, retry_on_conflict=False):
+    if HELPER_PHASE != "init":
+        return False
     # A report is accepted only when the server echoes the requested state.
     if status not in REPORT_STATES:
         return False
@@ -865,7 +915,8 @@ def _report_status(status, retry_on_conflict=False):
 
 
 def _best_effort_report(status):
-    _report_status(status)
+    if HELPER_PHASE == "init":
+        _report_status(status)
 
 
 def _credential_from_response(body):
@@ -925,23 +976,7 @@ def _save_api_credential(request, credential):
     return _write_git_identity(credential["git_username"], credential["git_email"])
 
 
-def _handle_init_get(request):
-    # Initialization is file-first; the service is consulted only for a target miss.
-    local_ok, stored = _read_local_credential(request)
-    if not local_ok:
-        _error("local")
-        return 1
-    if stored.get("password"):
-        if not _apply_initial_identity(stored):
-            _error("local")
-            return 1
-        if _output_credential(request, stored):
-            return 0
-        _error("local")
-        return 1
-    if not _is_initialization_target(request):
-        return 0
-
+def _credential_deadline():
     deadline = time.monotonic() + INIT_TIMEOUT_SECONDS
     deadline_value = os.environ.get("GIT_INIT_DEADLINE", "")
     if deadline_value:
@@ -950,6 +985,17 @@ def _handle_init_get(request):
         except ValueError:
             remaining = 0
         deadline = min(deadline, time.monotonic() + max(0, remaining))
+    return deadline
+
+
+def _wait_for_api_credential(request, requested_status=None):
+    if HELPER_PHASE == "init" and requested_status is not None and not _report_status(
+        requested_status, retry_on_conflict=True
+    ):
+        _error("service")
+        return 1
+
+    deadline = _credential_deadline()
     attempts = 0
     while True:
         if time.monotonic() >= deadline:
@@ -973,7 +1019,11 @@ def _handle_init_get(request):
                 _error("local")
                 return 1
             local_ok, stored = _read_local_credential(request)
-            if not local_ok or not _apply_initial_identity(stored) or not _output_credential(request, stored):
+            if (
+                not local_ok
+                or (HELPER_PHASE == "init" and not _apply_initial_identity(stored))
+                or not _output_credential(request, stored)
+            ):
                 _best_effort_report("failed_container")
                 _error("local")
                 return 1
@@ -984,7 +1034,7 @@ def _handle_init_get(request):
             if not isinstance(state, str):
                 state = None
             if state in WAITING_STATES:
-                if not _report_status(state):
+                if HELPER_PHASE == "init" and not _report_status(state):
                     _error("service")
                     return 1
                 if attempts >= MAX_ATTEMPTS:
@@ -1015,6 +1065,34 @@ def _handle_init_get(request):
         _best_effort_report("failed_service")
         _error("service")
         return 1
+
+
+def _handle_init_get(request):
+    # Initialization is file-first; a forced refresh bypasses local credentials.
+    refresh_status = _credential_refresh_status()
+    if refresh_status is not None:
+        if not _is_initialization_target(request):
+            return 0
+        if not _clear_local_credential(request):
+            _error("local")
+            return 1
+        return _wait_for_api_credential(request, refresh_status)
+
+    local_ok, stored = _read_local_credential(request)
+    if not local_ok:
+        _error("local")
+        return 1
+    if stored.get("password"):
+        if not _apply_initial_identity(stored):
+            _error("local")
+            return 1
+        if _output_credential(request, stored):
+            return 0
+        _error("local")
+        return 1
+    if not _is_initialization_target(request):
+        return 0
+    return _wait_for_api_credential(request)
 
 
 def _handle_runtime_get(request):
@@ -1374,6 +1452,7 @@ else
     export GIT_INIT_DEADLINE
     GIT_ATTEMPT=1
     GIT_CLONE_SUCCESS=0
+    GIT_CREDENTIAL_REFRESH_PROVIDED=0
     while [ "$GIT_ATTEMPT" -le "$GIT_MAX_ATTEMPTS" ]; do
         if ! GIT_NOW_SECONDS=$(date +%s); then
             echo "[start] 初始化计时器不可用" >&2
@@ -1395,15 +1474,21 @@ else
         # 暂存输出供错误分类；失败后输出限长、脱敏的诊断，避免只剩退出码。
         GIT_CLONE_STATUS=0
         GIT_CLONE_OK=0
+        GIT_CREDENTIAL_REFRESHED=0
+        if ! GIT_CREDENTIAL_EVENT_FILE=$(mktemp "$GIT_HELPER_DIR/.init-credential-event.XXXXXX"); then
+            echo "[start] 初始化凭证事件文件创建失败" >&2
+            "$GIT_INIT_HELPER" --report failed_container || true
+            exit 1
+        fi
         echo "[start] Git clone 第 $GIT_ATTEMPT/$GIT_MAX_ATTEMPTS 次尝试"
         if [ -n "$GITEE_BRANCH" ]; then
-            if GIT_CLONE_OUTPUT=$(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= SSH_ASKPASS= GIT_CONFIG_NOSYSTEM=1 LC_ALL=C timeout --signal=TERM "$GIT_REMAINING_SECONDS" git clone --branch "$GITEE_BRANCH" "$GIT_URL" 2>&1); then
+            if GIT_CLONE_OUTPUT=$(GIT_CREDENTIAL_EVENT_FILE="$GIT_CREDENTIAL_EVENT_FILE" GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= SSH_ASKPASS= GIT_CONFIG_NOSYSTEM=1 LC_ALL=C timeout --signal=TERM "$GIT_REMAINING_SECONDS" git clone --branch "$GITEE_BRANCH" "$GIT_URL" 2>&1); then
                 GIT_CLONE_OK=1
             else
                 GIT_CLONE_STATUS=$?
             fi
         else
-            if GIT_CLONE_OUTPUT=$(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= SSH_ASKPASS= GIT_CONFIG_NOSYSTEM=1 LC_ALL=C timeout --signal=TERM "$GIT_REMAINING_SECONDS" git clone "$GIT_URL" 2>&1); then
+            if GIT_CLONE_OUTPUT=$(GIT_CREDENTIAL_EVENT_FILE="$GIT_CREDENTIAL_EVENT_FILE" GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= SSH_ASKPASS= GIT_CONFIG_NOSYSTEM=1 LC_ALL=C timeout --signal=TERM "$GIT_REMAINING_SECONDS" git clone "$GIT_URL" 2>&1); then
                 GIT_CLONE_OK=1
             else
                 GIT_CLONE_STATUS=$?
@@ -1411,6 +1496,7 @@ else
         fi
         if [ "$GIT_CLONE_OK" -eq 1 ]; then
             GIT_CLONE_SUCCESS=1
+            rm -f -- "$GIT_CREDENTIAL_EVENT_FILE"
             # clone captures helper stderr; surface initialization API responses even on success.
             if [ -n "$GIT_CLONE_OUTPUT" ]; then
                 if ! printf '%s\n' "$GIT_CLONE_OUTPUT" |
@@ -1525,6 +1611,14 @@ else
             exit 1
         fi
         GIT_CLONE_OUTPUT_LOWER="${GIT_CLONE_OUTPUT,,}"
+        GIT_CREDENTIAL_WAS_PROVIDED=0
+        if [ -s "$GIT_CREDENTIAL_EVENT_FILE" ]; then
+            GIT_CREDENTIAL_WAS_PROVIDED=1
+        fi
+        if [ "$GIT_CREDENTIAL_REFRESH_PROVIDED" -eq 1 ]; then
+            GIT_CREDENTIAL_WAS_PROVIDED=1
+        fi
+        rm -f -- "$GIT_CREDENTIAL_EVENT_FILE"
         if [ "$GIT_CLONE_STATUS" -eq 124 ] || [[ "$GIT_CLONE_OUTPUT_LOWER" == *"credential helper error: timeout"* ]] || [[ "$GIT_CLONE_OUTPUT_LOWER" == *"timed out"* ]]; then
             unset GIT_CLONE_OUTPUT GIT_CLONE_OUTPUT_LOWER
             echo "[start] Git clone 初始化超时" >&2
@@ -1562,8 +1656,6 @@ else
         fi
         if [[ "$GIT_CLONE_OUTPUT_LOWER" == *"requested url returned error: 400"* ]] \
             || [[ "$GIT_CLONE_OUTPUT_LOWER" == *"requested url returned error: 404"* ]] \
-            || [[ "$GIT_CLONE_OUTPUT_LOWER" == *"repository not found"* ]] \
-            || [[ "$GIT_CLONE_OUTPUT_LOWER" == *"repository"* && "$GIT_CLONE_OUTPUT_LOWER" == *"not found"* ]] \
             || [[ "$GIT_CLONE_OUTPUT_LOWER" == *"couldn't find remote ref"* ]] \
             || [[ "$GIT_CLONE_OUTPUT_LOWER" == *"does not appear to be a git repository"* ]]; then
             unset GIT_CLONE_OUTPUT GIT_CLONE_OUTPUT_LOWER
@@ -1572,7 +1664,31 @@ else
             exit 1
         fi
 
-        if [[ "$GIT_CLONE_OUTPUT_LOWER" != *"authentication failed"* ]] \
+        if [[ "$GIT_CLONE_OUTPUT_LOWER" == *"repository not found"* ]] \
+            || [[ "$GIT_CLONE_OUTPUT_LOWER" == *"repository"* && "$GIT_CLONE_OUTPUT_LOWER" == *"not found"* ]]; then
+            GIT_CREDENTIAL_REFRESH_STATUS=credential_required
+            if [ "$GIT_CREDENTIAL_WAS_PROVIDED" -eq 1 ]; then
+                GIT_CREDENTIAL_REFRESH_STATUS=credential_rejected
+            fi
+            echo "[start] Git clone 返回 repository not found，凭证状态=$GIT_CREDENTIAL_REFRESH_STATUS，开始凭证刷新" >&2
+            if ! printf 'url=%s\n\n' "$GIT_URL" |
+                GIT_CREDENTIAL_EVENT_FILE="$GIT_CREDENTIAL_EVENT_FILE" \
+                GIT_CREDENTIAL_REFRESH=1 \
+                GIT_CREDENTIAL_REFRESH_STATUS="$GIT_CREDENTIAL_REFRESH_STATUS" \
+                GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 \
+                git credential fill > /dev/null; then
+                unset GIT_CLONE_OUTPUT GIT_CLONE_OUTPUT_LOWER GIT_CREDENTIAL_REFRESH_STATUS
+                echo "[start] repository not found 后凭证刷新失败" >&2
+                exit 1
+            fi
+            GIT_CREDENTIAL_REFRESH_PROVIDED=0
+            if [ -s "$GIT_CREDENTIAL_EVENT_FILE" ]; then
+                GIT_CREDENTIAL_REFRESH_PROVIDED=1
+            fi
+            rm -f -- "$GIT_CREDENTIAL_EVENT_FILE"
+            GIT_CREDENTIAL_REFRESHED=1
+            echo "[start] 凭证刷新完成，按原 Git clone 命令重试" >&2
+        elif [[ "$GIT_CLONE_OUTPUT_LOWER" != *"authentication failed"* ]] \
             && [[ "$GIT_CLONE_OUTPUT_LOWER" != *"could not read username"* ]] \
             && [[ "$GIT_CLONE_OUTPUT_LOWER" != *"requested url returned error: 401"* ]] \
             && [[ "$GIT_CLONE_OUTPUT_LOWER" != *"requested url returned error: 403"* ]] \
@@ -1595,13 +1711,20 @@ else
             && [[ "$GIT_CLONE_OUTPUT_LOWER" != *"proxy error"* ]] \
             && [[ "$GIT_CLONE_OUTPUT_LOWER" != *"network error"* ]] \
             && [[ "$GIT_CLONE_OUTPUT_LOWER" != *"early eof"* ]] \
-            && [[ "$GIT_CLONE_OUTPUT_LOWER" != *"remote end hung up"* ]]; then
+             && [[ "$GIT_CLONE_OUTPUT_LOWER" != *"remote end hung up"* ]]; then
             unset GIT_CLONE_OUTPUT GIT_CLONE_OUTPUT_LOWER
             echo "[start] Git clone 返回不可分类错误" >&2
             "$GIT_INIT_HELPER" --report failed_git || true
             exit 1
         fi
+        if [ "$GIT_CREDENTIAL_REFRESHED" -eq 0 ]; then
+            GIT_CREDENTIAL_REFRESH_PROVIDED=0
+        fi
         unset GIT_CLONE_OUTPUT GIT_CLONE_OUTPUT_LOWER
+        if [ "$GIT_CREDENTIAL_REFRESHED" -eq 1 ]; then
+            GIT_ATTEMPT=$((GIT_ATTEMPT + 1))
+            continue
+        fi
         if [ "$GIT_ATTEMPT" -ge "$GIT_MAX_ATTEMPTS" ]; then
             echo "[start] Git clone 达到重试上限" >&2
             "$GIT_INIT_HELPER" --report failed_max_attempts || true
