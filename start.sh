@@ -13,7 +13,7 @@ ssh-keygen -A
 GIT_INIT_TIMEOUT_SECONDS=600
 
 # 获取 git 凭证允许主动尝试的最大次数。
-GIT_MAX_ATTEMPTS=10
+GIT_MAX_ATTEMPTS=5
 
 # 服务端暂未提供凭证时，两次 credential GET 之间的等待时间。
 GIT_CREDENTIAL_POLL_INTERVAL_SECONDS=2
