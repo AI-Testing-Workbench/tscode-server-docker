@@ -16,6 +16,9 @@ ARG DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
+# 固定时区为中国上海，保证容器内时间戳正确
+ENV TZ=Asia/Shanghai
+
 # 验证编译环境位于 X64 环境下
 RUN dpkg --print-architecture | grep -qx amd64
 
@@ -66,12 +69,16 @@ RUN export DEBIAN_FRONTEND="${DEBIAN_FRONTEND}" \
         rsync \
         sqlite3 \
         tar \
+        tzdata \
         unzip \
         util-linux \
         vim-tiny \
         wget \
         xz-utils \
         zip \
+    && ln -snf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+    && printf '%s\n' 'Asia/Shanghai' > /etc/timezone \
+    && dpkg-reconfigure --frontend noninteractive tzdata \
     && rm -f /etc/ssh/ssh_host_* \
     && rm -rf /var/lib/apt/lists/*
 

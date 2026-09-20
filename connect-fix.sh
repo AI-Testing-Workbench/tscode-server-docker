@@ -12,7 +12,7 @@
 # 可重复执行(幂等): 未改动容器内系统配置, 只是额外起了一个 sshd 进程。
 set -u
 
-CONFIG="${HOME}/.local/share/testagent/config"
+CONFIG="${HOME}/.local/share/testagent/sandbox.config"
 [ -f "$CONFIG" ] || { echo "未找到配置文件: $CONFIG"; exit 1; }
 
 # 解析 config (ssh-config 格式), 提取每个 Host 段的 ContainerId 和 Port;
