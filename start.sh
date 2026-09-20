@@ -42,6 +42,9 @@ GIT_RUNTIME_WRAPPER=/usr/local/bin/git
 
 # Gitee 仓库 clone 时使用的父工作目录。
 GIT_APP_DIR=/app
+# SSH 登录 shell 的默认工作目录；成功 clone 后切换为具体仓库目录。
+SSH_LOGIN_WORKDIR="$GIT_APP_DIR"
+SSH_REPOSITORY_CLONED=0
 
 # 云端模式变量缺失时停止；存在但不是 1 时跳过云端初始化流程。
 if [ -z "${TESTAGENT_CLOUD_MODE+x}" ]; then
@@ -1756,6 +1759,7 @@ else
         "$GIT_INIT_HELPER" --report failed_max_attempts || true
         exit 1
     fi
+    SSH_REPOSITORY_CLONED=1
 
     # clone 成功后才从本地元数据写入真实 Git 身份，禁止生成占位身份。
     GIT_USERNAME=""
@@ -1893,6 +1897,31 @@ echo "[start] 云端码云初始化流程完成"
 else
     echo "[start] TESTAGENT_CLOUD_MODE 非 1，跳过云端码云初始化"
 fi
+
+# 交互式 SSH 登录默认进入 /app；完成仓库 clone 后进入 /app 下的仓库目录。
+# 使用 Bash printf 的 %q 安全转义仓库名，避免目录名被 profile 当作命令解释。
+if [ "$SSH_REPOSITORY_CLONED" -eq 1 ]; then
+    SSH_LOGIN_WORKDIR="$GIT_APP_CLONE_DIR"
+fi
+SSH_PROFILE_SCRIPT=/etc/profile.d/app.sh
+if [ -L "$SSH_PROFILE_SCRIPT" ] || {
+    [ -e "$SSH_PROFILE_SCRIPT" ] && [ ! -f "$SSH_PROFILE_SCRIPT" ]
+}; then
+    echo "[start] SSH 登录目录配置文件类型非法" >&2
+    exit 1
+fi
+if ! SSH_PROFILE_TEMP=$(mktemp /etc/profile.d/.app.sh.XXXXXX); then
+    echo "[start] SSH 登录目录配置临时文件创建失败" >&2
+    exit 1
+fi
+if ! printf 'cd -- %q\n' "$SSH_LOGIN_WORKDIR" > "$SSH_PROFILE_TEMP" \
+    || ! chmod 0644 "$SSH_PROFILE_TEMP" \
+    || ! mv -fT -- "$SSH_PROFILE_TEMP" "$SSH_PROFILE_SCRIPT"; then
+    rm -f -- "$SSH_PROFILE_TEMP"
+    echo "[start] SSH 登录目录配置写入失败" >&2
+    exit 1
+fi
+echo "[start] SSH 登录目录已设置为 $SSH_LOGIN_WORKDIR"
 
 # --- End ---
 
