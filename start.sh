@@ -1900,8 +1900,14 @@ fi
 
 # 交互式 SSH 登录默认进入 /app；完成仓库 clone 后进入 /app 下的仓库目录。
 # 使用 Bash printf 的 %q 安全转义仓库名，避免目录名被 profile 当作命令解释。
+# 直接追加 Bash 提示符配置，确保用户配置加载完成后主机名仍显示为 sandbox。
 if [ "$SSH_REPOSITORY_CLONED" -eq 1 ]; then
     SSH_LOGIN_WORKDIR="$GIT_APP_CLONE_DIR"
+fi
+SSH_BASHRC=/root/.bashrc
+if ! printf '%s\n' 'PS1='\''\u@sandbox:\w\$ '\''' >> "$SSH_BASHRC"; then
+    echo "[start] SSH 提示符配置写入失败" >&2
+    exit 1
 fi
 SSH_PROFILE_SCRIPT=/etc/profile.d/app.sh
 if [ -L "$SSH_PROFILE_SCRIPT" ] || {
