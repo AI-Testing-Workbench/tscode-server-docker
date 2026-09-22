@@ -67,6 +67,7 @@ RUN export DEBIAN_FRONTEND="${DEBIAN_FRONTEND}" \
         python3.12-dev \
         python3.12-venv \
         rsync \
+        socat \
         sqlite3 \
         tar \
         tzdata \

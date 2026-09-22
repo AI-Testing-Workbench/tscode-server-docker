@@ -1940,12 +1940,12 @@ echo "[start] SSH 启动配置已禁用 VS Code Git askpass"
 # --- End ---
 
 # OpenSandbox Chrome 沙盒：容器创建时注入 TESTAGENT_ENABLE_CHROME=1 即启用。
-# 在 VNC 桌面 :1(5901) 上后台拉起 Google Chrome(DevTools 9922)，并启动
-# noVNC/websockify(6080) 供宿主机浏览器实时查看；sshd 照常作为主进程；
-# 启动失败时只记录日志，不影响 SSH 功能。
+# 在 VNC 桌面 :1(5901) 上后台拉起 Google Chrome(DevTools 内部 127.0.0.1:9222)，用
+# socat 暴露为 0.0.0.0:9922 供容器外按 IP 访问，并启动 noVNC/websockify(6080)
+# 供宿主机浏览器实时查看；sshd 照常作为主进程；启动失败时只记录日志，不影响 SSH 功能。
 start_browser() {
     local i
-    echo "[start] TESTAGENT_ENABLE_CHROME=1: 启动 VNC(:1/5901) 与 Google Chrome(9922)"
+    echo "[start] TESTAGENT_ENABLE_CHROME=1: 启动 VNC(:1/5901) 与 Google Chrome(0.0.0.0:9922 -> 127.0.0.1:9222)"
 
     Xtigervnc :1 -geometry 1280x1024 -SecurityTypes None >/tmp/vnc.log 2>&1 &
     for i in $(seq 1 100); do
@@ -1962,6 +1962,14 @@ start_browser() {
 
     DISPLAY=:1 /root/.chrome.sh >/tmp/chrome.log 2>&1 &
 
+    # Chrome >= 130 的 DevTools 只监听 loopback，用 socat 转发到 0.0.0.0:9922。
+    # 客户端需以 IP(或 localhost) 访问，Chrome 不接受非 IP/localhost 的 Host。
+    if command -v socat >/dev/null 2>&1; then
+        socat TCP-LISTEN:9922,fork,reuseaddr TCP:127.0.0.1:9222 >/tmp/socat.log 2>&1 &
+    else
+        echo "[start] 未找到 socat，Chrome DevTools 无法暴露到 0.0.0.0:9922" >&2
+    fi
+
     # noVNC/websockify：把 VNC(5901) 转成 HTTP/WebSocket，宿主机浏览器经
     # execd /proxy/6080 打开 vnc.html 即可实时查看容器内 Chrome。
     if command -v websockify >/dev/null 2>&1; then
@@ -1970,7 +1978,7 @@ start_browser() {
         echo "[start] 未找到 websockify，跳过 noVNC(6080) 启动" >&2
     fi
 
-    echo "[start] VNC 与 Chrome 已在后台启动，日志见 /tmp/vnc.log、/tmp/chrome.log、/tmp/novnc.log"
+    echo "[start] VNC 与 Chrome 已在后台启动，日志见 /tmp/vnc.log、/tmp/chrome.log、/tmp/socat.log、/tmp/novnc.log"
 }
 
 case "${TESTAGENT_ENABLE_CHROME:-}" in

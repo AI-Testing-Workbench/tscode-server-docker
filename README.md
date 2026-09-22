@@ -62,12 +62,12 @@ $in="tscode-server.tar"; $out="$in.gz"; $src=[IO.File]::OpenRead($in); $dst=[IO.
 
 镜像内置 Google Chrome 与 TigerVNC，供 OpenSandbox 提供带浏览器的沙盒（基座仍为 Ubuntu 24.04，未回退 Debian）。
 
-- **Chrome**：官方 deb 安装的真 Chrome（Ubuntu apt 无 chromium 二进制包，仅有指向 snap 的过渡包），远程调试端口 `9922`（监听 `0.0.0.0`，可直接供容器外访问）
+- **Chrome**：官方 deb 安装的真 Chrome（Ubuntu apt 无 chromium 二进制包，仅有指向 snap 的过渡包）。Chrome ≥130 已停用 `--remote-debugging-address`，DevTools 固定只监听 `127.0.0.1:9222`；启动时用 `socat TCP-LISTEN:9922 TCP:127.0.0.1:9222` 暴露为 `0.0.0.0:9922`，容器外按 IP 访问。注意 Chrome 只接受 Host 为 IP 或 localhost，用域名访问会返回 `HTTP 500 Host header is specified and is not an IP address or localhost`
 - **VNC**：`Xtigervnc :1`，无密码，端口 `5901`
 - **noVNC**：`websockify --web=/usr/share/novnc 6080 localhost:5901`，端口 `6080`，供宿主机浏览器实时查看容器内 Chrome
 - 启动脚本：`/chrome.sh`（对应仓库根目录 `chrome.sh`）
 
-默认**不启动** Chrome。需要浏览器时，在创建容器/Sandbox 时注入环境变量 `TESTAGENT_ENABLE_CHROME=1`（`true`/`yes`/`on` 亦可），`/root/.start.sh` 检测到后会在后台拉起 VNC 与 Chrome，sshd 照常作为主进程运行；启动日志见容器内 `/tmp/vnc.log`、`/tmp/chrome.log`、`/tmp/novnc.log`。
+默认**不启动** Chrome。需要浏览器时，在创建容器/Sandbox 时注入环境变量 `TESTAGENT_ENABLE_CHROME=1`（`true`/`yes`/`on` 亦可），`/root/.start.sh` 检测到后会在后台拉起 VNC 与 Chrome，sshd 照常作为主进程运行；启动日志见容器内 `/tmp/vnc.log`、`/tmp/chrome.log`、`/tmp/socat.log`、`/tmp/novnc.log`。
 
 接入 OpenSandbox 时参照 `examples/chrome`、`examples/desktop`，通过 execd 端点访问：
 
