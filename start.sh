@@ -1905,7 +1905,10 @@ if [ "$SSH_REPOSITORY_CLONED" -eq 1 ]; then
     SSH_LOGIN_WORKDIR="$GIT_APP_CLONE_DIR"
 fi
 SSH_BASHRC=/root/.bashrc
-if ! printf '%s\n' 'PS1='\''\u@sandbox:\w\$ '\''' >> "$SSH_BASHRC"; then
+if ! {
+    printf '%s\n' 'unset GIT_ASKPASS VSCODE_GIT_IPC_HANDLE VSCODE_GIT_ASKPASS_MAIN VSCODE_GIT_ASKPASS_NODE VSCODE_GIT_ASKPASS_EXTRA_ARGS GIT_TERMINAL_PROMPT'
+    printf '%s\n' 'PS1='\''\u@sandbox:\w\$ '\'''
+} >> "$SSH_BASHRC"; then
     echo "[start] SSH 提示符配置写入失败" >&2
     exit 1
 fi
@@ -1920,7 +1923,11 @@ if ! SSH_PROFILE_TEMP=$(mktemp /etc/profile.d/.app.sh.XXXXXX); then
     echo "[start] SSH 登录目录配置临时文件创建失败" >&2
     exit 1
 fi
-if ! printf 'cd -- %q\n' "$SSH_LOGIN_WORKDIR" > "$SSH_PROFILE_TEMP" \
+if ! {
+    # Remove VS Code's injected askpass environment before Git operations in SSH sessions.
+    printf '%s\n' 'unset GIT_ASKPASS VSCODE_GIT_IPC_HANDLE VSCODE_GIT_ASKPASS_MAIN VSCODE_GIT_ASKPASS_NODE VSCODE_GIT_ASKPASS_EXTRA_ARGS GIT_TERMINAL_PROMPT'
+    printf 'cd -- %q\n' "$SSH_LOGIN_WORKDIR"
+} > "$SSH_PROFILE_TEMP" \
     || ! chmod 0644 "$SSH_PROFILE_TEMP" \
     || ! mv -fT -- "$SSH_PROFILE_TEMP" "$SSH_PROFILE_SCRIPT"; then
     rm -f -- "$SSH_PROFILE_TEMP"
@@ -1928,6 +1935,7 @@ if ! printf 'cd -- %q\n' "$SSH_LOGIN_WORKDIR" > "$SSH_PROFILE_TEMP" \
     exit 1
 fi
 echo "[start] SSH 登录目录已设置为 $SSH_LOGIN_WORKDIR"
+echo "[start] SSH 启动配置已禁用 VS Code Git askpass"
 
 # --- End ---
 
