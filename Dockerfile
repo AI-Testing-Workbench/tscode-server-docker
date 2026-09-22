@@ -201,8 +201,8 @@ RUN sed -i 's/\r$//' /root/.start.sh \
     && chmod 0755 /root/.start.sh \
     && chmod 0755 /root/.chrome.sh
 
-# Chrome 沙盒模式下暴露 VNC(5901) 与 DevTools(9222) 端口
-EXPOSE 22 5901 9222
+# Chrome 沙盒模式下暴露 VNC(5901) 与 DevTools(9922) 端口
+EXPOSE 22 5901 9922
 
 ENTRYPOINT ["/root/.start.sh"]
 CMD ["/usr/sbin/sshd", "-D", "-e"]

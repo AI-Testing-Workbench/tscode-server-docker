@@ -62,7 +62,7 @@ $in="tscode-server.tar"; $out="$in.gz"; $src=[IO.File]::OpenRead($in); $dst=[IO.
 
 镜像内置 Google Chrome 与 TigerVNC，供 OpenSandbox 提供带浏览器的沙盒（基座仍为 Ubuntu 24.04，未回退 Debian）。
 
-- **Chrome**：官方 deb 安装的真 Chrome（Ubuntu apt 无 chromium 二进制包，仅有指向 snap 的过渡包），远程调试端口 `9222`
+- **Chrome**：官方 deb 安装的真 Chrome（Ubuntu apt 无 chromium 二进制包，仅有指向 snap 的过渡包），远程调试端口 `9922`（监听 `0.0.0.0`，可直接供容器外访问）
 - **VNC**：`Xtigervnc :1`，无密码，端口 `5901`
 - **noVNC**：`websockify --web=/usr/share/novnc 6080 localhost:5901`，端口 `6080`，供宿主机浏览器实时查看容器内 Chrome
 - 启动脚本：`/chrome.sh`（对应仓库根目录 `chrome.sh`）
@@ -74,7 +74,7 @@ $in="tscode-server.tar"; $out="$in.gz"; $src=[IO.File]::OpenRead($in); $dst=[IO.
 ```text
 SSH:      <endpoint>/proxy/22
 VNC:      <endpoint>/proxy/5901
-DevTools: <endpoint>/proxy/9222/json
+DevTools: <endpoint>/proxy/9922/json
 noVNC:    <endpoint>/proxy/6080/vnc.html?host=<execd_host>&port=<execd_port>&path=proxy/6080
 ```
 

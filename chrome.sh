@@ -3,7 +3,7 @@
 set -euo pipefail
 
 # OpenSandbox Chrome 沙盒启动脚本：
-# 在 VNC 桌面(DISPLAY=:1) 上启动 Google Chrome，并开启 DevTools 远程调试端口 9222。
+# 在 VNC 桌面(DISPLAY=:1) 上启动 Google Chrome，并开启 DevTools 远程调试端口 9922。
 # 由 /root/.start.sh 在 TESTAGENT_ENABLE_CHROME=1 时后台调用。
 
 flags=()
@@ -20,7 +20,8 @@ flags+=(--start-maximized) # We're the only thing running, use the whole screen
 
 flags+=(--disable-field-trial-config) # Keeps things consistent and a little faster
 
-flags+=(--remote-debugging-port=9222)     # Enable remote debugging
+flags+=(--remote-debugging-port=9922)         # Enable remote debugging
+flags+=(--remote-debugging-address=0.0.0.0)   # 监听所有网卡，允许容器外访问 DevTools
 flags+=(--user-data-dir=/tmp/chrome-data) # DevTools remote debugging requires a non-default data directory. Specify this using --user-data-dir.
 
 # Launch Chrome

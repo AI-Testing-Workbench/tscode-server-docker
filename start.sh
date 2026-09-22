@@ -1940,12 +1940,12 @@ echo "[start] SSH 启动配置已禁用 VS Code Git askpass"
 # --- End ---
 
 # OpenSandbox Chrome 沙盒：容器创建时注入 TESTAGENT_ENABLE_CHROME=1 即启用。
-# 在 VNC 桌面 :1(5901) 上后台拉起 Google Chrome(DevTools 9222)，并启动
+# 在 VNC 桌面 :1(5901) 上后台拉起 Google Chrome(DevTools 9922)，并启动
 # noVNC/websockify(6080) 供宿主机浏览器实时查看；sshd 照常作为主进程；
 # 启动失败时只记录日志，不影响 SSH 功能。
 start_browser() {
     local i
-    echo "[start] TESTAGENT_ENABLE_CHROME=1: 启动 VNC(:1/5901) 与 Google Chrome(9222)"
+    echo "[start] TESTAGENT_ENABLE_CHROME=1: 启动 VNC(:1/5901) 与 Google Chrome(9922)"
 
     Xtigervnc :1 -geometry 1280x1024 -SecurityTypes None >/tmp/vnc.log 2>&1 &
     for i in $(seq 1 100); do
