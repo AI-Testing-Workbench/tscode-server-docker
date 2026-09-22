@@ -22,6 +22,7 @@ flags+=(--disable-field-trial-config) # Keeps things consistent and a little fas
 
 flags+=(--remote-debugging-port=9922)         # Enable remote debugging
 flags+=(--remote-debugging-address=0.0.0.0)   # 监听所有网卡，允许容器外访问 DevTools
+flags+=(--remote-allow-origins=*)             # 允许任意 Origin 的 DevTools WebSocket 连接(CHROME >= 111 默认校验)
 flags+=(--user-data-dir=/tmp/chrome-data) # DevTools remote debugging requires a non-default data directory. Specify this using --user-data-dir.
 
 # Launch Chrome
