@@ -1207,7 +1207,7 @@ def _handle_store(request):
     # 运行期不在 credential helper 内读取终端；用户需要显式执行上传命令。
     _progress("runtime local credential store complete")
     print(
-        "\033[1;33m[TS Code] 码云凭证已保存至本地，并且将随着云端服务的销毁而删除，如需持久化使用，请手动执行 upload_to_testagent 命令以加密上传至 TestAgent Cloud 数据库\033[0m",
+        "\033[1;33m[TS Code] 码云凭证已保存至本地，并且将随着云端服务的销毁而删除，如需持久化使用，请手动执行 testagent-cloud upload 命令以加密上传至 TestAgent Cloud 数据库\033[0m",
         file=sys.stderr,
     )
     return 0
