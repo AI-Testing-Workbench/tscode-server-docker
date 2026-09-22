@@ -186,10 +186,13 @@ WORKDIR /app
 RUN mkdir -p /tmp/.X11-unix \
     && chmod 1777 /tmp/.X11-unix
 
-# 设置用户手动上传 git 凭证命令
+# 设置用户手动上传 git 凭证命令和支持帮助命令
 COPY upload_to_testagent /usr/local/bin/upload_to_testagent
+COPY print_testagent_help /usr/local/bin/print_testagent_help
 RUN sed -i 's/\r$//' /usr/local/bin/upload_to_testagent \
-    && chmod 0755 /usr/local/bin/upload_to_testagent
+    && sed -i 's/\r$//' /usr/local/bin/print_testagent_help \
+    && chmod 0755 /usr/local/bin/upload_to_testagent \
+    && chmod 0755 /usr/local/bin/print_testagent_help
 
 # 配置启动脚本
 COPY start.sh /root/.start.sh
