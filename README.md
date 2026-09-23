@@ -86,3 +86,18 @@ noVNC:    <endpoint>/proxy/6080/vnc.html?host=<execd_host>&port=<execd_port>&pat
 
 ## 注意事项
 在docker作为容器引擎（行外全流程测试），需要在通过sandbox创建好容器后，需要在宿主机执行下 connect-fix.sh 脚本。k8s作为背后引擎（生产环境）则不需要
+
+## 旧式 TLS 重新协商（unsafe legacy renegotiation）
+
+部分代理或旧服务端在 TLS 握手中不发送 RFC 5746 扩展，OpenSSL 3 默认拒绝此类连接。表现为在 TSCode 里下载插件、或扩展发起 HTTPS 请求时报：
+
+```text
+write EPROTO ... SSL routines:final_renegotiate:unsafe legacy renegotiation disabled
+```
+
+镜像分两条路径启用 `UnsafeLegacyRenegotiation`（即 `SSL_OP_LEGACY_SERVER_CONNECT`）作为兜底：
+
+- **系统 OpenSSL 工具（curl/git/openssl）**：内置 `/etc/ssl/tscode-openssl.cnf`，通过 sshd `SetEnv` 注入 `OPENSSL_CONF`。
+- **Node（tscode-server、扩展宿主）**：Node 不会把 OpenSSL 的 `[system_default]` 应用到自身的 `SSL_CTX`，因此改用 `tscode-tls-legacy-renegotiation.cjs` 预加载补丁，经 `NODE_OPTIONS=--require` 注入，直接在 `tls.connect`/`tls.createSecureContext` 的 `secureOptions` 上补该 SSL_OP 位。
+
+两条路径都由 `start.sh` 通过 sshd `SetEnv` 下发，仅影响 SSH 会话派生的进程。注意：这会略微降低 TLS 安全性（允许不安全的旧式重新协商），仅用于兼容无法升级的旧服务端/代理；若网络环境已不再需要，删除 Dockerfile 中的 `tscode-openssl.cnf` 生成与补丁 COPY，以及 `start.sh` 里的 `OPENSSL_CONF`/`NODE_OPTIONS` 注入即可。

@@ -83,6 +83,26 @@ RUN export DEBIAN_FRONTEND="${DEBIAN_FRONTEND}" \
     && rm -f /etc/ssh/ssh_host_* \
     && rm -rf /var/lib/apt/lists/*
 
+# 允许不安全的旧式 TLS 重新协商（OpenSSL 3 起默认禁用 SSL_OP_LEGACY_SERVER_CONNECT）。
+# 部分代理/旧服务端在握手时不发送 RFC 5746 扩展，会让 curl、git 等系统 OpenSSL 工具报
+# "write EPROTO ... final_renegotiate:unsafe legacy renegotiation disabled"。
+# 该配置由 start.sh 通过 sshd SetEnv 注入 OPENSSL_CONF，仅影响 SSH 会话派生的进程。
+# Node 侧不走 system_default（实测不生效），改用 tscode-tls-legacy-renegotiation.cjs
+# 预加载补丁，nodejs_conf 仅作为个别 Node 构建的兜底。
+RUN printf '%s\n' \
+    'openssl_conf = openssl_init' \
+    'nodejs_conf = openssl_init' \
+    '' \
+    '[openssl_init]' \
+    'ssl_conf = ssl_sect' \
+    '' \
+    '[ssl_sect]' \
+    'system_default = system_default_sect' \
+    '' \
+    '[system_default_sect]' \
+    'Options = UnsafeLegacyRenegotiation' \
+    > /etc/ssl/tscode-openssl.cnf
+
 # 安装 Java
 RUN export DEBIAN_FRONTEND="${DEBIAN_FRONTEND}" \
     && apt-get update \
@@ -191,6 +211,11 @@ RUN mkdir -p /tmp/.X11-unix \
 COPY testagent-cloud /usr/local/bin/testagent-cloud
 RUN sed -i 's/\r$//' /usr/local/bin/testagent-cloud \
     && chmod 0755 /usr/local/bin/testagent-cloud
+
+# Node TLS 补丁：补上 SSL_OP_LEGACY_SERVER_CONNECT（OpenSSL 的 system_default 不会
+# 作用于 Node 自身的 SSL_CTX，故 Node 侧改用 --require 预加载补丁）。
+COPY tscode-tls-legacy-renegotiation.cjs /usr/local/lib/tscode/tls-legacy-renegotiation.cjs
+RUN chmod 0644 /usr/local/lib/tscode/tls-legacy-renegotiation.cjs
 
 # 配置启动脚本
 COPY start.sh /root/.start.sh
