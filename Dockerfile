@@ -195,12 +195,26 @@ RUN sed -i 's/\r$//' /usr/local/bin/testagent-cloud \
 # 配置启动脚本
 COPY start.sh /root/.start.sh
 COPY chrome.sh /root/.chrome.sh
+COPY git-clone.sh /root/.git-clone.sh
+COPY git-helpers/init-credential-helper /root/.git-helper/init-credential-helper
+COPY git-helpers/runtime-credential-helper /root/.git-helper/runtime-credential-helper
 
-# 修改启动脚本换行符为 Linux LF
+# 添加 git 凭证脚本
+RUN install -d -m 0700 /root/.git-helper \
+    && chmod 0755 /root/.git-helper/init-credential-helper \
+    && chmod 0755 /root/.git-helper/runtime-credential-helper
+
+# 修改启动、clone 和 credential helper 脚本换行符为 Linux LF
 RUN sed -i 's/\r$//' /root/.start.sh \
     && sed -i 's/\r$//' /root/.chrome.sh \
+    && sed -i 's/\r$//' /root/.git-clone.sh \
+    && sed -i 's/\r$//' /root/.git-helper/init-credential-helper \
+    && sed -i 's/\r$//' /root/.git-helper/runtime-credential-helper \
     && chmod 0755 /root/.start.sh \
-    && chmod 0755 /root/.chrome.sh
+    && chmod 0755 /root/.chrome.sh \
+    && chmod 0755 /root/.git-clone.sh \
+    && chmod 0755 /root/.git-helper/init-credential-helper \
+    && chmod 0755 /root/.git-helper/runtime-credential-helper
 
 # Chrome 沙盒模式下暴露 VNC(5901) 与 DevTools(9922) 端口
 EXPOSE 22 5901 9922

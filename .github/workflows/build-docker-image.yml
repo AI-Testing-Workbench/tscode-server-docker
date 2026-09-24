@@ -85,7 +85,9 @@ jobs:
       - name: 准备 docker build context
         run: |
           mkdir -p context
-          cp Dockerfile start.sh chrome.sh testagent-cloud context/
+          cp Dockerfile start.sh chrome.sh git-clone.sh testagent-cloud context/
+          mkdir -p context/git-helpers
+          cp git-helpers/init-credential-helper git-helpers/runtime-credential-helper context/git-helpers/
           mv server-artifact/vscode-server-linux-x64.tar.gz context/
           # 若仓库内 vsix/ 目录下存在插件，则一并打进镜像
           if ls vsix/*.vsix >/dev/null 2>&1; then
