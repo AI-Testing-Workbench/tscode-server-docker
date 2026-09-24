@@ -160,9 +160,20 @@ RUN --mount=type=bind,source=.,target=/tmp/build-context,readonly \
             --install-extension
 
 # 为 tscode 扩展中的原生二进制增加执行权限
-RUN chmod 0755 \
-    "${TSCODE_SERVER_DATA_DIR}/bin/${TSCODE_SERVER_COMMIT}/extensions/test-tech.testagent/bin/testagent" \
-    "${TSCODE_SERVER_DATA_DIR}/bin/${TSCODE_SERVER_COMMIT}/extensions/test-tech.testagent/bin/testflow"
+# test-workbench_change: 只用 node 版运行时(testagent-node wrapper);bun 版(bin/testagent)可选,
+# 缺失时不再让镜像构建失败(为后续移除 bun 版做准备)。
+RUN set -eux; \
+    EXT="${TSCODE_SERVER_DATA_DIR}/bin/${TSCODE_SERVER_COMMIT}/extensions/test-tech.testagent"; \
+    chmod 0755 "${EXT}/bin/testagent-node" 2>/dev/null || echo "[warn] bin/testagent-node not found"; \
+    chmod 0755 "${EXT}/bin/testagent" 2>/dev/null || true; \
+    chmod 0755 "${EXT}/bin/testflow" 2>/dev/null || true
+
+# test-workbench_change: 双保险 —— 在扩展 env-path 写入 TestAgent 之前,预置到登录 shell,
+# 使 SSH 远端 agent host(`bash -l -c` 登录 shell)在扩展尚未激活时也能解析到 node 版 wrapper。
+RUN set -eux; \
+    EXT="${TSCODE_SERVER_DATA_DIR}/bin/${TSCODE_SERVER_COMMIT}/extensions/test-tech.testagent"; \
+    printf 'export TestAgent="%s/bin"\nexport PATH="$TestAgent:$PATH"\n' "$EXT" > /etc/profile.d/testagent-env.sh; \
+    chmod 0644 /etc/profile.d/testagent-env.sh
 
 # 预装 ripgrep（静态 musl 二进制），避免 testagent 运行期联网下载
 # 安装到 /usr/local/bin 供 PATH 查找，同时预置 opencode 缓存目录兜底
