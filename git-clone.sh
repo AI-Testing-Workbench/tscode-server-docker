@@ -288,6 +288,8 @@ if [ "$TESTAGENT_CLOUD_MODE" != "1" ]; then
     exit 0
 fi
 
+cd -- "$APP_DIR" || fail failed_container "切换到 /app 目录失败"
+
 if ! command -v python3 >/dev/null 2>&1 || ! command -v git >/dev/null 2>&1 \
     || ! command -v timeout >/dev/null 2>&1; then
     fail "" "Python 3、Git 或 timeout 不可用"
