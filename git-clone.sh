@@ -1,6 +1,8 @@
 #!/bin/bash
 
 set -e
+# Keep Git and credential-helper diagnostics on the clone command's stdout.
+exec 2>&1
 umask 077
 
 # 镜像内固定路径；start.sh 不准备或调用 Git。

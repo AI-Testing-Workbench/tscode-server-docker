@@ -1,6 +1,8 @@
 #!/bin/bash
 
 set -e
+# Container diagnostics must share stdout with the startup messages.
+exec 2>&1
 
 # 容器 SSH 指纹生成
 # 不同容器的指纹不一致
