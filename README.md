@@ -57,6 +57,16 @@ docker save -o tscode-server.tar testagent/tscode-server:latest
 $in="tscode-server.tar"; $out="$in.gz"; $src=[IO.File]::OpenRead($in); $dst=[IO.File]::Create($out); $gz=[IO.Compression.GZipStream]::new($dst,[IO.Compression.CompressionMode]::Compress); $src.CopyTo($gz); $gz.Dispose(); $dst.Dispose(); $src.Dispose()
 ```
 
+## 容器启动后手动初始化 Git
+
+`/root/.start.sh` 只启动容器服务，不执行 Git clone 或配置凭证。容器创建并运行后，在容器内手动执行：
+
+```sh
+/root/.git-clone.sh
+```
+
+脚本不接收参数，从容器环境读取 `TESTAGENT_CLOUD_*` 配置。初始化成功后会配置运行期 credential helper 和 Git 认证失败重试入口；后续 SSH 登录默认进入 clone 仓库目录。clone 失败只结束该脚本，不会停止已运行的 SSH、Chrome 或 VNC 服务。
+
 
 ## OpenSandbox Chrome 沙盒模式
 
