@@ -334,6 +334,8 @@ if [ "$EXTRA_FILE_PREEXISTED" -eq 0 ]; then
 fi
 
 git config --global --unset-all credential.helper || true
+git config --global --replace-all credential.helper "$INIT_HELPER" \
+    || fail "" "初始化 Git credential helper 配置失败"
 REPORT_READY=1
 "$INIT_HELPER" --report starting || fail failed_service "Git starting 状态上报失败"
 
