@@ -83,6 +83,26 @@ RUN export DEBIAN_FRONTEND="${DEBIAN_FRONTEND}" \
     && rm -f /etc/ssh/ssh_host_* \
     && rm -rf /var/lib/apt/lists/*
 
+# 允许不安全的旧式 TLS 重新协商（OpenSSL 3 起默认禁用 SSL_OP_LEGACY_SERVER_CONNECT）。
+# 部分代理/旧服务端在握手时不发送 RFC 5746 扩展，会让 curl、git 等系统 OpenSSL 工具报
+# "write EPROTO ... final_renegotiate:unsafe legacy renegotiation disabled"。
+# 该配置由 start.sh 通过 sshd SetEnv 注入 OPENSSL_CONF，仅影响 SSH 会话派生的进程。
+# Node 侧不走 system_default（实测不生效），改用 tscode-tls-legacy-renegotiation.cjs
+# 预加载补丁，nodejs_conf 仅作为个别 Node 构建的兜底。
+RUN printf '%s\n' \
+    'openssl_conf = openssl_init' \
+    'nodejs_conf = openssl_init' \
+    '' \
+    '[openssl_init]' \
+    'ssl_conf = ssl_sect' \
+    '' \
+    '[ssl_sect]' \
+    'system_default = system_default_sect' \
+    '' \
+    '[system_default_sect]' \
+    'Options = UnsafeLegacyRenegotiation' \
+    > /etc/ssl/tscode-openssl.cnf
+
 # 安装 Java
 RUN export DEBIAN_FRONTEND="${DEBIAN_FRONTEND}" \
     && apt-get update \
@@ -140,9 +160,20 @@ RUN --mount=type=bind,source=.,target=/tmp/build-context,readonly \
             --install-extension
 
 # 为 tscode 扩展中的原生二进制增加执行权限
-RUN chmod 0755 \
-    "${TSCODE_SERVER_DATA_DIR}/bin/${TSCODE_SERVER_COMMIT}/extensions/test-tech.testagent/bin/testagent" \
-    "${TSCODE_SERVER_DATA_DIR}/bin/${TSCODE_SERVER_COMMIT}/extensions/test-tech.testagent/bin/testflow"
+# test-workbench_change: 只用 node 版运行时(testagent-node wrapper);bun 版(bin/testagent)可选,
+# 缺失时不再让镜像构建失败(为后续移除 bun 版做准备)。
+RUN set -eux; \
+    EXT="${TSCODE_SERVER_DATA_DIR}/bin/${TSCODE_SERVER_COMMIT}/extensions/test-tech.testagent"; \
+    chmod 0755 "${EXT}/bin/testagent-node" 2>/dev/null || echo "[warn] bin/testagent-node not found"; \
+    chmod 0755 "${EXT}/bin/testagent" 2>/dev/null || true; \
+    chmod 0755 "${EXT}/bin/testflow" 2>/dev/null || true
+
+# test-workbench_change: 双保险 —— 在扩展 env-path 写入 TestAgent 之前,预置到登录 shell,
+# 使 SSH 远端 agent host(`bash -l -c` 登录 shell)在扩展尚未激活时也能解析到 node 版 wrapper。
+RUN set -eux; \
+    EXT="${TSCODE_SERVER_DATA_DIR}/bin/${TSCODE_SERVER_COMMIT}/extensions/test-tech.testagent"; \
+    printf 'export TestAgent="%s/bin"\nexport PATH="$TestAgent:$PATH"\n' "$EXT" > /etc/profile.d/testagent-env.sh; \
+    chmod 0644 /etc/profile.d/testagent-env.sh
 
 # 预装 ripgrep（静态 musl 二进制），避免 testagent 运行期联网下载
 # 安装到 /usr/local/bin 供 PATH 查找，同时预置 opencode 缓存目录兜底
@@ -191,6 +222,11 @@ RUN mkdir -p /tmp/.X11-unix \
 COPY testagent-cloud /usr/local/bin/testagent-cloud
 RUN sed -i 's/\r$//' /usr/local/bin/testagent-cloud \
     && chmod 0755 /usr/local/bin/testagent-cloud
+
+# Node TLS 补丁：补上 SSL_OP_LEGACY_SERVER_CONNECT（OpenSSL 的 system_default 不会
+# 作用于 Node 自身的 SSL_CTX，故 Node 侧改用 --require 预加载补丁）。
+COPY tscode-tls-legacy-renegotiation.cjs /usr/local/lib/tscode/tls-legacy-renegotiation.cjs
+RUN chmod 0644 /usr/local/lib/tscode/tls-legacy-renegotiation.cjs
 
 # 配置启动脚本
 COPY start.sh /root/.start.sh
