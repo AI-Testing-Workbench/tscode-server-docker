@@ -64,6 +64,74 @@ PY
     unset TESTAGENT_CLOUD_PIP_URL TESTAGENT_CLOUD_NPM_URL
 fi
 
+install_git_helpers() {
+    local helper helper_source helper_target helper_temp
+    local helper_dir=/root/.git-helper
+    local helper_temp_dir=/root/.git-helper-temp
+
+    if [ -L "$helper_temp_dir" ] || {
+        [ -e "$helper_temp_dir" ] && [ ! -d "$helper_temp_dir" ]
+    }; then
+        echo "[start] Git helper 暂存目录类型非法" >&2
+        return 1
+    fi
+    if [ -L "$helper_dir" ] || { [ -e "$helper_dir" ] && [ ! -d "$helper_dir" ]; }; then
+        echo "[start] Git helper 目录类型非法" >&2
+        return 1
+    fi
+    if ! install -d -m 0700 "$helper_dir"; then
+        echo "[start] Git helper 目录创建失败" >&2
+        return 1
+    fi
+
+    if [ ! -d "$helper_temp_dir" ]; then
+        for helper in init-credential-helper runtime-credential-helper; do
+            helper_target=$helper_dir/$helper
+            if [ -L "$helper_target" ] || [ ! -f "$helper_target" ]; then
+                echo "[start] Git helper 缺失或类型非法: $helper_target" >&2
+                return 1
+            fi
+        done
+        return 0
+    fi
+
+    for helper in init-credential-helper runtime-credential-helper; do
+        helper_source=$helper_temp_dir/$helper
+        helper_target=$helper_dir/$helper
+        if [ -L "$helper_source" ] || [ ! -f "$helper_source" ]; then
+            echo "[start] Git helper 暂存文件缺失或类型非法: $helper_source" >&2
+            return 1
+        fi
+        if [ -L "$helper_target" ] || {
+            [ -e "$helper_target" ] && [ ! -f "$helper_target" ]
+        }; then
+            echo "[start] Git helper 目标类型非法: $helper_target" >&2
+            return 1
+        fi
+
+        helper_temp=$(mktemp "$helper_dir/.${helper}.XXXXXX") || {
+            echo "[start] Git helper 临时文件创建失败" >&2
+            return 1
+        }
+        if ! cat -- "$helper_source" > "$helper_temp" \
+            || ! chmod 0700 "$helper_temp" \
+            || ! mv -fT -- "$helper_temp" "$helper_target"; then
+            rm -f -- "$helper_temp"
+            echo "[start] Git helper 安装失败: $helper_target" >&2
+            return 1
+        fi
+    done
+
+    if ! chmod 0700 "$helper_dir" || ! rm -rf -- "$helper_temp_dir"; then
+        echo "[start] Git helper 暂存目录清理失败" >&2
+        return 1
+    fi
+}
+
+if ! install_git_helpers; then
+    exit 1
+fi
+
 # 配置 SSH 提示符。
 if ! printf '%s\n' 'PS1='\''\u@sandbox:\w\$ '\''' >> /root/.bashrc; then
     echo "[start] SSH 提示符配置写入失败" >&2
