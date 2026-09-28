@@ -311,6 +311,8 @@ for helper in "$INIT_HELPER" "$RUNTIME_HELPER"; do
 done
 chmod 0700 "$INIT_HELPER" "$RUNTIME_HELPER" || fail "" "Credential helper 权限设置失败"
 
+EXTRA_FILE_PREEXISTED=0
+[ ! -e "$EXTRA_FILE" ] && [ ! -L "$EXTRA_FILE" ] || EXTRA_FILE_PREEXISTED=1
 for file in "$CREDENTIAL_FILE" "$EXTRA_FILE"; do
     [ ! -L "$file" ] && { [ ! -e "$file" ] || [ -f "$file" ]; } || fail "" "本地凭证文件类型非法"
     if [ -e "$file" ] && [ "$(stat -c '%h' "$file")" != "1" ]; then
@@ -323,7 +325,9 @@ chmod 0600 "$CREDENTIAL_FILE" "$EXTRA_FILE" || fail "" "本地凭证文件权限
 [ ! -L "$REJECTED_FILE" ] && { [ ! -e "$REJECTED_FILE" ] || [ -f "$REJECTED_FILE" ]; } \
     || fail "" "运行期认证标记类型非法"
 rm -f -- "$REJECTED_FILE" || fail "" "运行期认证标记清理失败"
-"$INIT_HELPER" --normalize-extra || fail "" "Git 身份文件整理失败"
+if [ "$EXTRA_FILE_PREEXISTED" -eq 0 ]; then
+    "$INIT_HELPER" --normalize-extra || fail "" "Git 身份文件整理失败"
+fi
 
 git config --global --unset-all credential.helper || true
 REPORT_READY=1
@@ -339,6 +343,7 @@ GITEE_REPOSITORY=${TESTAGENT_CLOUD_GITEE_REPOSITORY:-}
 GITEE_BRANCH=${TESTAGENT_CLOUD_GITEE_BRANCH:-}
 GIT_URL=""
 CLONE_DIR=""
+CLONE_SKIPPED=0
 CLONE_SUCCEEDED=0
 
 if [ -n "$GITEE_URL$GITEE_USER$GITEE_REPOSITORY" ]; then
@@ -389,21 +394,39 @@ PY
     echo "[git-clone] 码云地址校验通过"
 
     [ -d "$APP_DIR" ] || fail failed_container "/app 不是目录"
-    if ! APP_CONTENT=$(find "$APP_DIR" -mindepth 1 -maxdepth 1 -print -quit); then
-        fail failed_container "/app 内容检查失败"
+    if [ -L "$CLONE_DIR" ] || { [ -e "$CLONE_DIR" ] && [ ! -d "$CLONE_DIR" ]; }; then
+        fail failed_initialize "Git clone 目标目录类型非法"
     fi
-    [ -z "$APP_CONTENT" ] || fail failed_initialize "/app 非空，拒绝 clone"
+    if [ -d "$CLONE_DIR" ]; then
+        if ! CLONE_CONTENT=$(find "$CLONE_DIR" -mindepth 1 -maxdepth 1 -print -quit); then
+            fail failed_container "Git clone 目标目录内容检查失败"
+        fi
+        if [ -n "$CLONE_CONTENT" ]; then
+            CLONE_SKIPPED=1
+            echo "[git-clone] clone 目标目录非空，跳过 clone"
+        else
+            rmdir -- "$CLONE_DIR" || fail failed_initialize "Git clone 空目标目录清理失败"
+        fi
+    fi
+    if [ "$CLONE_SKIPPED" -eq 0 ]; then
+        if ! APP_CONTENT=$(find "$APP_DIR" -mindepth 1 -maxdepth 1 -print -quit); then
+            fail failed_container "/app 内容检查失败"
+        fi
+        [ -z "$APP_CONTENT" ] || fail failed_initialize "/app 非空，拒绝 clone"
+    fi
     "$INIT_HELPER" --report processing || fail failed_service "Git processing 状态上报失败"
 
-    if ! START_SECONDS=$(date +%s); then
-        fail failed_container "初始化计时器不可用"
+    if [ "$CLONE_SKIPPED" -eq 0 ]; then
+        if ! START_SECONDS=$(date +%s); then
+            fail failed_container "初始化计时器不可用"
+        fi
+        GIT_INIT_DEADLINE=$((START_SECONDS + GIT_INIT_TIMEOUT_SECONDS))
+        export GIT_INIT_DEADLINE
     fi
-    GIT_INIT_DEADLINE=$((START_SECONDS + GIT_INIT_TIMEOUT_SECONDS))
-    export GIT_INIT_DEADLINE
     ATTEMPT=1
     REFRESH_PROVIDED=0
 
-    while [ "$ATTEMPT" -le "$GIT_MAX_ATTEMPTS" ]; do
+    while [ "$CLONE_SKIPPED" -eq 0 ] && [ "$ATTEMPT" -le "$GIT_MAX_ATTEMPTS" ]; do
         if ! NOW_SECONDS=$(date +%s); then
             fail failed_container "初始化计时器不可用"
         fi
@@ -525,7 +548,8 @@ PY
         sleep "$SLEEP_SECONDS" || fail failed_container "Git 重试等待失败"
         ATTEMPT=$((ATTEMPT + 1))
     done
-    [ "$CLONE_SUCCEEDED" -eq 1 ] || fail failed_max_attempts "Git clone 未成功"
+    [ "$CLONE_SKIPPED" -eq 1 ] || [ "$CLONE_SUCCEEDED" -eq 1 ] \
+        || fail failed_max_attempts "Git clone 未成功"
 
     USERNAME=""
     EMAIL=""
