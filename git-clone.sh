@@ -135,13 +135,17 @@ elif has_any(
     "does not appear to be a git repository",
 ):
     result = "fatal_git"
+elif has_any(
+    "authentication failed",
+    "requested url returned error: 401",
+    "requested url returned error: 403",
+    "could not read username",
+    "http basic: access denied",
+):
+    result = "credential_rejected"
 elif "repository not found" in text or ("repository" in text and "not found" in text):
     result = "repository_not_found"
 elif has_any(
-    "authentication failed",
-    "could not read username",
-    "requested url returned error: 401",
-    "requested url returned error: 403",
     "could not resolve host",
     "failed to connect",
     "couldn't connect",
@@ -508,7 +512,7 @@ PY
             fatal_git)
                 fail failed_git "Git clone 返回不可恢复错误"
                 ;;
-            repository_not_found)
+            credential_rejected | repository_not_found)
                 [ "$ATTEMPT" -lt "$GIT_MAX_ATTEMPTS" ] \
                     || fail failed_max_attempts "Git clone 达到重试上限"
                 REFRESH_STATUS=credential_required
@@ -520,7 +524,7 @@ PY
                     GIT_CREDENTIAL_REFRESH_STATUS="$REFRESH_STATUS" \
                     GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 \
                     git credential fill > /dev/null; then
-                    fail "" "repository not found 后凭证刷新失败"
+                    fail "" "认证失败后凭证刷新失败"
                 fi
                 REFRESH_PROVIDED=0
                 [ ! -s "$CREDENTIAL_EVENT_FILE" ] || REFRESH_PROVIDED=1
