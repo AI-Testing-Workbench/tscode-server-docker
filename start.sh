@@ -65,6 +65,10 @@ PY
             echo "[start] NPM 镜像配置失败" >&2
             exit 1
         fi
+        if ! npm config set strict-ssl false --global; then
+            echo "[start] NPM strict-ssl 配置失败" >&2
+            exit 1
+        fi
         echo "[start] NPM 全局镜像配置完成"
     else
         echo "[start] 未配置 NPM 镜像，跳过"
