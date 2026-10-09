@@ -41,10 +41,16 @@ PY
     fi
 
     if [ -n "${TESTAGENT_CLOUD_PIP_URL:-}" ]; then
+        pip_trusted_host=$(python3 -c 'import sys; from urllib.parse import urlsplit; print(urlsplit(sys.argv[1]).netloc)' "$TESTAGENT_CLOUD_PIP_URL")
         if ! python3 -m pip config --global set global.index-url "$TESTAGENT_CLOUD_PIP_URL"; then
             echo "[start] PIP 镜像配置失败" >&2
             exit 1
         fi
+        if ! python3 -m pip config --global set global.trusted-host "$pip_trusted_host"; then
+            echo "[start] PIP trusted-host 配置失败" >&2
+            exit 1
+        fi
+        unset pip_trusted_host
         echo "[start] PIP 全局镜像配置完成"
     else
         echo "[start] 未配置 PIP 镜像，跳过"
