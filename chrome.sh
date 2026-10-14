@@ -21,7 +21,10 @@ flags+=(--disable-dev-shm-usage) # We don't (normally) have a shared memory file
 flags+=(--no-default-browser-check) # Avoids hanging with a "set chrome as default browser" dialog
 flags+=(--no-first-run)             # Avoids hanging with a "set chrome as default browser" dialog
 
-flags+=(--start-maximized) # We're the only thing running, use the whole screen
+# 容器内没有窗口管理器，--start-maximized 不会生效，会留下右侧黑边。
+# 显式指定窗口尺寸与位置铺满 VNC 桌面（需与 start.sh 中 Xtigervnc 的 -geometry 1280x1024 一致）。
+flags+=(--window-size=1280,1024)
+flags+=(--window-position=0,0)
 
 flags+=(--disable-field-trial-config) # Keeps things consistent and a little faster
 

@@ -152,6 +152,21 @@ fi
 
 # --- End ---
 
+# 解析容器外可达的 host，与 tscode 扩展的 resolveShareHost（"复制 Web UI 连接"）保持一致：
+# 优先 TESTAGENT_SHARE_HOST 覆盖，否则取第一个非 loopback 的 IPv4，最后回退 127.0.0.1。
+resolve_share_host() {
+    if [ -n "${TESTAGENT_SHARE_HOST:-}" ]; then
+        printf '%s' "$TESTAGENT_SHARE_HOST"
+        return
+    fi
+    local ip
+    ip="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^127\.' | grep -v '^$' | head -n1)"
+    if [ -z "$ip" ]; then
+        ip="$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)"
+    fi
+    printf '%s' "${ip:-127.0.0.1}"
+}
+
 # OpenSandbox Chrome 沙盒：容器创建时注入 TESTAGENT_ENABLE_CHROME=1 即启用。
 # 在 VNC 桌面 :1(5901) 上后台拉起 Google Chrome(DevTools 内部 127.0.0.1:9222)，用
 # socat 暴露为 0.0.0.0:9922 供容器外按 IP 访问，并启动 noVNC/websockify(6080)
@@ -173,7 +188,15 @@ start_browser() {
         return 0
     fi
 
-    DISPLAY=:1 /root/.chrome.sh >/tmp/chrome.log 2>&1 &
+    # 守护式启动 Chrome：窗口被关闭（进程退出）后自动重新拉起，保证 VNC 上始终有浏览器。
+    (
+        while true; do
+            # `|| true` 防止 set -e 因 Chrome 非 0 退出（如崩溃）而终止该守护循环。
+            DISPLAY=:1 /root/.chrome.sh >>/tmp/chrome.log 2>&1 || true
+            echo "[start] Chrome 已退出，1 秒后自动重启 $(date '+%F %T')" >>/tmp/chrome.log
+            sleep 1
+        done
+    ) &
 
     # Chrome >= 130 的 DevTools 只监听 loopback，用 socat 转发到 0.0.0.0:9922。
     # 客户端需以 IP(或 localhost) 访问，Chrome 不接受非 IP/localhost 的 Host。
@@ -195,8 +218,11 @@ start_browser() {
     # 由 write_sshd_environment_config 的 TESTAGENT* SetEnv 逻辑自动注入 SSH 会话，
     # 供 tscode 扩展(TestAgent)与用户自己的自动化工具（如 Playwright connectOverCDP）复用同一浏览器。
     # 仅在门控命中、Chrome 已就绪时设置，端点缺失即代表可回退到自启动浏览器。
+    # 对外地址里的 host 用实际可达 IP（与插件"复制 Web UI 连接"同一套解析逻辑）。
+    local cdp_host
+    cdp_host="$(resolve_share_host)"
     export TESTAGENT_CDP_ENDPOINT=http://127.0.0.1:9222
-    export TESTAGENT_CDP_EXTERNAL='http://<host>:9922'
+    export TESTAGENT_CDP_EXTERNAL="http://${cdp_host}:9922"
 
     echo "[start] VNC 与 Chrome 已在后台启动，日志见 /tmp/vnc.log、/tmp/chrome.log、/tmp/socat.log、/tmp/novnc.log"
     echo "[start] CDP 端点: TESTAGENT_CDP_ENDPOINT=${TESTAGENT_CDP_ENDPOINT} TESTAGENT_CDP_EXTERNAL=${TESTAGENT_CDP_EXTERNAL}"
