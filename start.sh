@@ -191,7 +191,15 @@ start_browser() {
         echo "[start] 未找到 websockify，跳过 noVNC(6080) 启动" >&2
     fi
 
+    # 常驻 Chrome 的 CDP 端点：容器内插件/工具走 loopback:9222，容器外走 socat:9922。
+    # 由 write_sshd_environment_config 的 TESTAGENT* SetEnv 逻辑自动注入 SSH 会话，
+    # 供 tscode 扩展(TestAgent)与用户自己的自动化工具（如 Playwright connectOverCDP）复用同一浏览器。
+    # 仅在门控命中、Chrome 已就绪时设置，端点缺失即代表可回退到自启动浏览器。
+    export TESTAGENT_CDP_ENDPOINT=http://127.0.0.1:9222
+    export TESTAGENT_CDP_EXTERNAL='http://<host>:9922'
+
     echo "[start] VNC 与 Chrome 已在后台启动，日志见 /tmp/vnc.log、/tmp/chrome.log、/tmp/socat.log、/tmp/novnc.log"
+    echo "[start] CDP 端点: TESTAGENT_CDP_ENDPOINT=${TESTAGENT_CDP_ENDPOINT} TESTAGENT_CDP_EXTERNAL=${TESTAGENT_CDP_EXTERNAL}"
 }
 
 case "${TESTAGENT_ENABLE_CHROME:-}" in

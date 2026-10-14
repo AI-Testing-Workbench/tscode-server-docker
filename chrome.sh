@@ -7,6 +7,10 @@ set -euo pipefail
 # 由 /root/.start.sh 在 TESTAGENT_ENABLE_CHROME=1 时后台调用，并由 start.sh 用
 # socat 把 9222 转发到 0.0.0.0:9922，供容器外按 IP 访问。
 
+# 浏览器界面语言默认使用中文；Chromium 会优先读取 LANGUAGE 决定 UI 语言。
+# 允许外部通过注入 LANGUAGE 覆盖默认值。
+export LANGUAGE="${LANGUAGE:-zh_CN.UTF-8}"
+
 flags=()
 
 flags+=(--no-sandbox) # We can't use sandbox in a container
@@ -20,6 +24,9 @@ flags+=(--no-first-run)             # Avoids hanging with a "set chrome as defau
 flags+=(--start-maximized) # We're the only thing running, use the whole screen
 
 flags+=(--disable-field-trial-config) # Keeps things consistent and a little faster
+
+# 允许访问 http 地址：关闭 Chrome 自动把 http 升级为 https 的相关特性。
+flags+=(--disable-features=AutoupgradeHttps,HttpsUpgrades,UpgradeInsecureRequests)
 
 # Chrome >= 130 出于安全考虑已停用 --remote-debugging-address，
 # DevTools 一律只监听 127.0.0.1，无法直接绑定 0.0.0.0。

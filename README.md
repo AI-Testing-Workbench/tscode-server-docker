@@ -92,6 +92,27 @@ noVNC:    <endpoint>/proxy/6080/vnc.html?host=<execd_host>&port=<execd_port>&pat
 `http://127.0.0.1:50365/proxy/6080/vnc.html?host=127.0.0.1&port=50365&path=proxy/6080`
 即可实时看到容器内 Chrome 的自动化执行画面。
 
+### 共享浏览器（CDP）
+
+该 Chrome 是**常驻的共享浏览器**：VNC 上看到的就是它。当 `TESTAGENT_ENABLE_CHROME=1` 时，`start.sh` 会在启动 Chrome 后注入两个环境变量（经 `sshd SetEnv` 传递到 SSH 会话）：
+
+- `TESTAGENT_CDP_ENDPOINT=http://127.0.0.1:9222` —— 容器内使用，TestAgent 扩展与用户自己的自动化工具都连它。
+- `TESTAGENT_CDP_EXTERNAL=http://<host>:9922` —— 容器外使用（`<host>` 为可访问的容器 IP/映射地址）。
+
+任何 Playwright 工具都能接入同一个浏览器（画面与 VNC 同步）：
+
+```bash
+# 命令行方式
+npx @playwright/mcp@latest --cdp-endpoint http://127.0.0.1:9222
+```
+
+```ts
+// 代码方式
+const browser = await chromium.connectOverCDP("http://127.0.0.1:9222")
+```
+
+TestAgent 插件在云端模式下会自动使用 `TESTAGENT_CDP_ENDPOINT`；也可在「设置 → 浏览器」里手动填写任意远程 CDP 地址来操作它。共享同一浏览器意味着多个工具会看到同一组标签页（单一 context），并发使用时请注意相互干扰。
+
 注意：`dl.google.com` 需可访问（GitHub Actions 正常，国内手动构建若超时可自备 Google Chrome deb 镜像）。
 
 ## 注意事项
