@@ -223,9 +223,12 @@ start_browser() {
     cdp_host="$(resolve_share_host)"
     export TESTAGENT_CDP_ENDPOINT=http://127.0.0.1:9222
     export TESTAGENT_CDP_EXTERNAL="http://${cdp_host}:9922"
+    # noVNC 可视化地址：host 与 CDP 对外地址一致，指向 websockify(6080)，
+    # autoconnect=true 让打开页面后自动连上 VNC。
+    export TESTAGENT_VNC_URL="http://${cdp_host}:6080/vnc.html?autoconnect=true"
 
     echo "[start] VNC 与 Chrome 已在后台启动，日志见 /tmp/vnc.log、/tmp/chrome.log、/tmp/socat.log、/tmp/novnc.log"
-    echo "[start] CDP 端点: TESTAGENT_CDP_ENDPOINT=${TESTAGENT_CDP_ENDPOINT} TESTAGENT_CDP_EXTERNAL=${TESTAGENT_CDP_EXTERNAL}"
+    echo "[start] CDP 端点: TESTAGENT_CDP_ENDPOINT=${TESTAGENT_CDP_ENDPOINT} TESTAGENT_CDP_EXTERNAL=${TESTAGENT_CDP_EXTERNAL} TESTAGENT_VNC_URL=${TESTAGENT_VNC_URL}"
 }
 
 case "${TESTAGENT_ENABLE_CHROME:-}" in

@@ -38,5 +38,5 @@ flags+=(--remote-debugging-port=9222)     # Enable remote debugging (仅 loopbac
 flags+=(--remote-allow-origins=*)         # 允许任意 Origin 的 DevTools WebSocket 连接(CHROME >= 111 默认校验)
 flags+=(--user-data-dir=/tmp/chrome-data) # DevTools remote debugging requires a non-default data directory. Specify this using --user-data-dir.
 
-# Launch Chrome
-exec google-chrome "${flags[@]}" "https://www.google.com"
+# Launch Chrome（默认打开空白页）
+exec google-chrome "${flags[@]}" "about:blank"
