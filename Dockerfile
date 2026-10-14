@@ -132,8 +132,11 @@ RUN export DEBIAN_FRONTEND="${DEBIAN_FRONTEND}" \
         websockify \
         xdg-utils \
         x11-utils \
+        fonts-noto-cjk \
+        fonts-noto-color-emoji \
     && test "$(node --version)" = v24.20.0 \
     && test "$(/usr/bin/node --version)" = v24.20.0 \
+    && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 
 # 声明当前处于云端模式
