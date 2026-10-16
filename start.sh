@@ -251,7 +251,7 @@ write_sshd_environment_config() {
     # 固定注入 TLS 旧式重协商兜底：OPENSSL_CONF 供 curl/git/系统 OpenSSL 使用；
     # NODE_OPTIONS 预加载补丁，让 tscode-server 与扩展宿主的 tls.connect 带上
     # SSL_OP_LEGACY_SERVER_CONNECT（Node 不会应用 OpenSSL 的 system_default）。
-    local sshd_setenv_line='SetEnv OPENSSL_CONF="/etc/ssl/tscode-openssl.cnf" NODE_OPTIONS="--require /usr/local/lib/tscode/tls-legacy-renegotiation.cjs"'
+    local sshd_setenv_line='SetEnv LANG="C.UTF-8" LC_ALL="C.UTF-8" OPENSSL_CONF="/etc/ssl/tscode-openssl.cnf" NODE_OPTIONS="--require /usr/local/lib/tscode/tls-legacy-renegotiation.cjs"'
 
     if [ ! -f "$sshd_config" ]; then
         echo "[start] 未找到 SSHD 主配置: $sshd_config" >&2
