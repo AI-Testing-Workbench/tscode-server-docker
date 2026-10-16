@@ -233,13 +233,15 @@ RUN chmod 0644 /usr/local/lib/tscode/tls-legacy-renegotiation.cjs
 
 # 配置启动脚本
 COPY start.sh /root/.start.sh
+COPY custom.sh /root/.custom.sh
 COPY chrome.sh /root/.chrome.sh
 COPY git-clone.sh /root/.git-clone.sh
 COPY git-helpers/init-credential-helper /root/.git-helper-temp/init-credential-helper
 COPY git-helpers/runtime-credential-helper /root/.git-helper-temp/runtime-credential-helper
 
-# 修改启动、clone 和 credential helper 脚本换行符为 Linux LF
+# 修改启动、自定义操作、clone 和 credential helper 脚本换行符为 Linux LF
 RUN sed -i 's/\r$//' /root/.start.sh \
+    && sed -i 's/\r$//' /root/.custom.sh \
     && sed -i 's/\r$//' /root/.chrome.sh \
     && sed -i 's/\r$//' /root/.git-clone.sh \
     && sed -i 's/\r$//' /root/.git-helper-temp/init-credential-helper \

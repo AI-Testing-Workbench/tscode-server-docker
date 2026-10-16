@@ -387,6 +387,8 @@ if ! write_sshd_environment_config; then
     exit 1
 fi
 
+bash /root/.custom.sh
+
 # 启动 SSH 服务
 if [ "$#" -eq 0 ]; then
     set -- /usr/sbin/sshd -D -e
