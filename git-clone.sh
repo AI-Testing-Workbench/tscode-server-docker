@@ -418,12 +418,12 @@ PY
             rmdir -- "$CLONE_DIR" || fail failed_initialize "Git clone 空目标目录清理失败"
         fi
     fi
-    if [ "$CLONE_SKIPPED" -eq 0 ]; then
-        if ! APP_CONTENT=$(find "$APP_DIR" -mindepth 1 -maxdepth 1 -print -quit); then
-            fail failed_container "/app 内容检查失败"
-        fi
-        [ -z "$APP_CONTENT" ] || fail failed_initialize "/app 非空，拒绝 clone"
-    fi
+#    if [ "$CLONE_SKIPPED" -eq 0 ]; then
+#        if ! APP_CONTENT=$(find "$APP_DIR" -mindepth 1 -maxdepth 1 -print -quit); then
+#            fail failed_container "/app 内容检查失败"
+#        fi
+#        [ -z "$APP_CONTENT" ] || fail failed_initialize "/app 非空，拒绝 clone"
+#    fi
     "$INIT_HELPER" --report processing || fail failed_service "Git processing 状态上报失败"
 
     if [ "$CLONE_SKIPPED" -eq 0 ]; then
