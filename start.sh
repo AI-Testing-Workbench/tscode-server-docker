@@ -144,6 +144,170 @@ if ! install_git_helpers; then
     exit 1
 fi
 
+# 启动时启用运行期 Git 认证入口；后续手动 Git 初始化会临时切换到 init helper。
+GIT_HELPER_DIR=/root/.git-helper
+GIT_RUNTIME_HELPER=$GIT_HELPER_DIR/runtime-credential-helper
+GIT_REJECTED_FILE=$GIT_HELPER_DIR/.runtime-credential-rejected
+RUNTIME_GIT=/usr/local/bin/git
+
+if [ ! -x /usr/bin/git ] || [ ! -x "$GIT_RUNTIME_HELPER" ]; then
+    echo "[start] Git 或运行期 credential helper 不可用" >&2
+    exit 1
+fi
+if [ -L "$RUNTIME_GIT" ] || { [ -e "$RUNTIME_GIT" ] && [ ! -f "$RUNTIME_GIT" ]; }; then
+    echo "[start] 运行期 Git 入口类型非法" >&2
+    exit 1
+fi
+
+runtime_git_temp=$(mktemp "$GIT_HELPER_DIR/.runtime-git.XXXXXX") || {
+    echo "[start] 运行期 Git 入口临时文件创建失败" >&2
+    exit 1
+}
+if ! cat > "$runtime_git_temp" <<'SH'
+#!/bin/bash
+
+set -u
+REAL_GIT=/usr/bin/git
+REJECTED_FILE=__REJECTED_FILE__
+REMOTE_OPERATION=0
+
+for argument in "$@"; do
+    case "$argument" in
+        clone | fetch | pull | push | ls-remote | submodule)
+            REMOTE_OPERATION=1
+            break
+            ;;
+    esac
+done
+
+if [ "$REMOTE_OPERATION" -eq 0 ]; then
+    exec "$REAL_GIT" "$@"
+fi
+
+OUTPUT_FILE=$(mktemp "${TMPDIR:-/tmp}/tscode-runtime-git.XXXXXX") || exec "$REAL_GIT" "$@"
+"$REAL_GIT" "$@" > >(tee "$OUTPUT_FILE") 2> >(tee -a "$OUTPUT_FILE" >&2)
+GIT_STATUS=$?
+wait
+
+if [ "$GIT_STATUS" -eq 0 ] || [ ! -f "$REJECTED_FILE" ] || ! grep -Eiq -- \
+    'authentication failed|authentication required|invalid (username|user(name)?|password|token)|incorrect (username|password)|access denied|unauthorized|http basic:.*access denied|requested url returned error: (401|403)|remote:.*(401|403)' \
+    "$OUTPUT_FILE"; then
+    rm -f -- "$OUTPUT_FILE"
+    exit "$GIT_STATUS"
+fi
+
+rm -f -- "$OUTPUT_FILE"
+exec "$REAL_GIT" "$@"
+SH
+then
+    rm -f -- "$runtime_git_temp"
+    echo "[start] 运行期 Git 入口写入失败" >&2
+    exit 1
+fi
+if ! sed -i "s|__REJECTED_FILE__|$GIT_REJECTED_FILE|g" "$runtime_git_temp" \
+    || ! chmod 0755 "$runtime_git_temp" \
+    || ! mv -fT -- "$runtime_git_temp" "$RUNTIME_GIT"; then
+    rm -f -- "$runtime_git_temp"
+    echo "[start] 运行期 Git 入口安装失败" >&2
+    exit 1
+fi
+
+if ! /usr/bin/git config --global --replace-all credential.helper "$GIT_RUNTIME_HELPER"; then
+    echo "[start] 运行期 credential helper 配置失败" >&2
+    exit 1
+fi
+echo "[start] 运行期 Git 入口和 credential helper 已启用"
+
+# 从已挂载的身份文件恢复 Git 身份；身份缺失时不设置占位值。
+GIT_EXTRA_FILE=$GIT_HELPER_DIR/.git-extra
+if [ -L "$GIT_EXTRA_FILE" ] || { [ -e "$GIT_EXTRA_FILE" ] && [ ! -f "$GIT_EXTRA_FILE" ]; }; then
+    echo "[start] Git 身份文件类型非法" >&2
+    exit 1
+fi
+if [ -f "$GIT_EXTRA_FILE" ]; then
+    if [ "$(stat -c '%h' "$GIT_EXTRA_FILE")" != "1" ]; then
+        echo "[start] Git 身份文件链接数非法" >&2
+        exit 1
+    fi
+    GIT_USERNAME=""
+    GIT_EMAIL=""
+    while IFS='=' read -r key value; do
+        case "$key" in
+            git_username) GIT_USERNAME=$value ;;
+            git_email) GIT_EMAIL=$value ;;
+        esac
+    done < "$GIT_EXTRA_FILE"
+    if [ -n "$GIT_USERNAME" ]; then
+        if [[ "$GIT_USERNAME" == *[[:cntrl:]]* || "$GIT_EMAIL" == *[[:cntrl:]]* ]]; then
+            echo "[start] Git 身份包含控制字符" >&2
+            exit 1
+        fi
+        if ! /usr/bin/git config --global --replace-all user.name "$GIT_USERNAME" \
+            || ! /usr/bin/git config --global --replace-all user.email "$GIT_EMAIL"; then
+            echo "[start] Git 用户身份配置失败" >&2
+            exit 1
+        fi
+        echo "[start] 已从本地身份文件恢复 Git 用户身份"
+    else
+        echo "[start] 本地身份文件没有用户名，跳过 Git 身份配置"
+    fi
+    unset GIT_USERNAME GIT_EMAIL key value
+else
+    echo "[start] 未找到本地 Git 身份文件，跳过 Git 身份配置"
+fi
+
+# SSH 登录时清理 IDE 注入的 askpass 环境，避免覆盖 credential helper。
+SSH_BASHRC=/root/.bashrc
+SSH_ASKPASS_UNSET='unset GIT_ASKPASS VSCODE_GIT_IPC_HANDLE VSCODE_GIT_ASKPASS_MAIN VSCODE_GIT_ASKPASS_NODE VSCODE_GIT_ASKPASS_EXTRA_ARGS GIT_TERMINAL_PROMPT'
+if [ -L "$SSH_BASHRC" ] || { [ -e "$SSH_BASHRC" ] && [ ! -f "$SSH_BASHRC" ]; }; then
+    echo "[start] SSH bashrc 文件类型非法" >&2
+    exit 1
+fi
+if ! grep -Fqx -- "$SSH_ASKPASS_UNSET" "$SSH_BASHRC" 2>/dev/null; then
+    if ! printf '%s\n' "$SSH_ASKPASS_UNSET" >> "$SSH_BASHRC"; then
+        echo "[start] SSH askpass 环境清理配置写入失败" >&2
+        exit 1
+    fi
+fi
+
+# 有已挂载仓库时进入仓库目录；否则继续使用镜像默认的 /app。
+GITEE_REPOSITORY=${TESTAGENT_CLOUD_GITEE_REPOSITORY:-}
+SSH_WORKDIR=/app
+case "$GITEE_REPOSITORY" in
+    "" | . | .. | *..* | */* | *\\* | *\?* | *\#* | *\%* | *[[:space:]]* | *[[:cntrl:]]*)
+        echo "[start] 仓库目录未配置或名称非法，使用默认 SSH 登录目录 /app"
+        ;;
+    *)
+        GIT_REPOSITORY_DIR=/app/$GITEE_REPOSITORY
+        if [ -d "$GIT_REPOSITORY_DIR" ] && [ ! -L "$GIT_REPOSITORY_DIR" ]; then
+            SSH_WORKDIR=$GIT_REPOSITORY_DIR
+        else
+            echo "[start] 预期仓库目录不存在，使用默认 SSH 登录目录 /app"
+        fi
+        ;;
+esac
+
+SSH_PROFILE=/etc/profile.d/app.sh
+if [ -L "$SSH_PROFILE" ] || { [ -e "$SSH_PROFILE" ] && [ ! -f "$SSH_PROFILE" ]; }; then
+    echo "[start] SSH profile 文件类型非法" >&2
+    exit 1
+fi
+ssh_profile_temp=$(mktemp /etc/profile.d/.app.sh.XXXXXX) || {
+    echo "[start] SSH profile 临时文件创建失败" >&2
+    exit 1
+}
+if ! {
+    printf '%s\n' "$SSH_ASKPASS_UNSET"
+    printf 'cd -- %q\n' "$SSH_WORKDIR"
+} > "$ssh_profile_temp" \
+    || ! chmod 0644 "$ssh_profile_temp" \
+    || ! mv -fT -- "$ssh_profile_temp" "$SSH_PROFILE"; then
+    rm -f -- "$ssh_profile_temp"
+    echo "[start] SSH 登录环境配置失败" >&2
+    exit 1
+fi
+echo "[start] SSH 登录目录设为 $SSH_WORKDIR"
+
 # 配置 SSH 提示符。
 if ! printf '%s\n' 'PS1='\''\u@sandbox:\w\$ '\''' >> /root/.bashrc; then
     echo "[start] SSH 提示符配置写入失败" >&2
