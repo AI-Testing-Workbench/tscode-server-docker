@@ -79,10 +79,10 @@ $in="tscode-server.tar"; $out="$in.gz"; $src=[IO.File]::OpenRead($in); $dst=[IO.
 
 默认**不启动** Chrome。需要浏览器时，在创建容器/Sandbox 时注入环境变量 `TESTAGENT_ENABLE_CHROME=1`（`true`/`yes`/`on` 亦可），`/root/.start.sh` 检测到后会在后台拉起 VNC 与 Chrome，sshd 照常作为主进程运行；启动日志见容器内 `/tmp/vnc.log`、`/tmp/chrome.log`、`/tmp/socat.log`、`/tmp/novnc.log`。
 
-接入 OpenSandbox 时参照 `examples/chrome`、`examples/desktop`，通过 execd 端点访问：
+容器内 SSH 服务监听 `2222`。接入 OpenSandbox 时参照 `examples/chrome`、`examples/desktop`，确保端口转发目标为容器端口 `2222`，并通过 execd 端点访问：
 
 ```text
-SSH:      <endpoint>/proxy/22
+SSH:      <endpoint>/proxy/2222
 VNC:      <endpoint>/proxy/5901
 DevTools: <endpoint>/proxy/9922/json
 noVNC:    <endpoint>/proxy/6080/vnc.html?host=<execd_host>&port=<execd_port>&path=proxy/6080

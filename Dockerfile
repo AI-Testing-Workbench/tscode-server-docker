@@ -206,8 +206,8 @@ RUN set -eux; \
 
 # 配置 SSH
 RUN mkdir -p /run/sshd \
-    && sed -i -E '/^[[:space:]]*#?[[:space:]]*(AuthenticationMethods|PasswordAuthentication|PermitRootLogin|PermitEmptyPasswords|PubkeyAuthentication|KbdInteractiveAuthentication|ChallengeResponseAuthentication|HostbasedAuthentication|GSSAPIAuthentication|UsePAM|AllowTcpForwarding|AllowStreamLocalForwarding)[[:space:]]+/d' /etc/ssh/sshd_config \
-    && printf '\nAuthenticationMethods none\nPasswordAuthentication yes\nPermitRootLogin yes\nPermitEmptyPasswords yes\nPubkeyAuthentication no\nKbdInteractiveAuthentication no\nChallengeResponseAuthentication no\nHostbasedAuthentication no\nGSSAPIAuthentication no\nUsePAM no\nAllowTcpForwarding yes\nAllowStreamLocalForwarding yes\n' >> /etc/ssh/sshd_config \
+    && sed -i -E '/^[[:space:]]*#?[[:space:]]*(Port|AuthenticationMethods|PasswordAuthentication|PermitRootLogin|PermitEmptyPasswords|PubkeyAuthentication|KbdInteractiveAuthentication|ChallengeResponseAuthentication|HostbasedAuthentication|GSSAPIAuthentication|UsePAM|AllowTcpForwarding|AllowStreamLocalForwarding)[[:space:]]+/d' /etc/ssh/sshd_config \
+    && printf '\nPort 2222\nAuthenticationMethods none\nPasswordAuthentication yes\nPermitRootLogin yes\nPermitEmptyPasswords yes\nPubkeyAuthentication no\nKbdInteractiveAuthentication no\nChallengeResponseAuthentication no\nHostbasedAuthentication no\nGSSAPIAuthentication no\nUsePAM no\nAllowTcpForwarding yes\nAllowStreamLocalForwarding yes\n' >> /etc/ssh/sshd_config \
     && passwd --delete root
 
 # 创建用户工作目录
@@ -252,8 +252,8 @@ RUN sed -i 's/\r$//' /root/.start.sh \
     && chmod 0755 /root/.git-helper-temp/init-credential-helper \
     && chmod 0755 /root/.git-helper-temp/runtime-credential-helper
 
-# Chrome 沙盒模式下暴露 VNC(5901) 与 DevTools(9922) 端口
-EXPOSE 22 5901 9922
+# 暴露 SSH(2222)、Chrome 沙盒 VNC(5901) 与 DevTools(9922) 端口
+EXPOSE 2222 5901 9922
 
 ENTRYPOINT ["/root/.start.sh"]
 CMD ["/usr/sbin/sshd", "-D", "-e"]
