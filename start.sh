@@ -551,6 +551,7 @@ if ! write_sshd_environment_config; then
     exit 1
 fi
 
+bash /root/.start-testagent.sh
 nohup bash /root/.custom.sh > /root/.custom.log 2>&1 </dev/null &
 
 # 启动 SSH 服务
