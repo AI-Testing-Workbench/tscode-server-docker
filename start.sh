@@ -551,7 +551,17 @@ if ! write_sshd_environment_config; then
     exit 1
 fi
 
-bash /root/.start-testagent.sh
+# 默认启动 TestAgent 服务；设置 TESTAGENT_AUTO_START=0 可跳过。
+case "${TESTAGENT_AUTO_START:-1}" in
+    0 | false | FALSE | no | NO | off | OFF)
+        echo "[start] TESTAGENT_AUTO_START 已禁用，跳过 TestAgent 服务启动"
+        ;;
+    *)
+        if ! bash /root/.start-testagent.sh; then
+            echo "[start] TestAgent 服务启动失败，继续启动沙箱（日志见 /root/.local/share/testagent/server.log）" >&2
+        fi
+        ;;
+esac
 nohup bash /root/.custom.sh > /root/.custom.log 2>&1 </dev/null &
 
 # 启动 SSH 服务

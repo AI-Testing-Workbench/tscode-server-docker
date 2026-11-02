@@ -67,6 +67,8 @@ $in="tscode-server.tar"; $out="$in.gz"; $src=[IO.File]::OpenRead($in); $dst=[IO.
 
 脚本不接收参数，从容器环境读取 `TESTAGENT_CLOUD_*` 配置。初始化期间切换到 init credential helper；成功后切回 runtime helper、安装 Git 认证失败重试入口，并将后续 SSH 登录目录设为 clone 仓库目录。clone 失败只结束该脚本，不会停止已运行的 SSH、Chrome 或 VNC 服务，也不会恢复 runtime helper。
 
+容器默认启动 TestAgent 服务；创建容器时注入 `TESTAGENT_AUTO_START=0`（`false`/`no`/`off` 亦可）可跳过该启动步骤。
+
 
 ## OpenSandbox Chrome 沙盒模式
 
