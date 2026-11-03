@@ -552,7 +552,7 @@ if ! write_sshd_environment_config; then
 fi
 
 # 默认启动 TestAgent 服务；设置 TESTAGENT_AUTO_START=0 可跳过。
-case "${TESTAGENT_AUTO_START:-1}" in
+case "${TESTAGENT_AUTO_START:-0}" in
     0 | false | FALSE | no | NO | off | OFF)
         echo "[start] TESTAGENT_AUTO_START 已禁用，跳过 TestAgent 服务启动"
         ;;
