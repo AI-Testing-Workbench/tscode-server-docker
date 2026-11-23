@@ -402,7 +402,7 @@ case "${TESTAGENT_ENABLE_CHROME:-}" in
 esac
 
 # sshd 为每个会话重新组装环境；传递调用方注入的 TESTAGENT_* 配置。
-# 使用 SetEnv 让 22 端口和 connect-fix.sh 启动的额外 sshd 共享同一份环境配置。
+# 主 SSH 服务监听 2222；读取同一 sshd 配置的会话使用相同环境变量。
 write_sshd_environment_config() {
     local sshd_config=/etc/ssh/sshd_config
     local sshd_config_dir=/etc/ssh/sshd_config.d
