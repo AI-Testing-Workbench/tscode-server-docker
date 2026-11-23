@@ -551,6 +551,13 @@ if ! write_sshd_environment_config; then
     exit 1
 fi
 
+# 云端模式下准备外部用户信息；此流程独立于 TestAgent 自动启动开关。
+if [ "${TESTAGENT_CLOUD_MODE:-}" = "1" ] || [ -f /etc/tscode-cloud-mode ]; then
+    if ! bash /root/.gen-external-user.sh; then
+        echo "[start] 外部用户信息准备失败，继续启动" >&2
+    fi
+fi
+
 # 默认启动 TestAgent 服务；设置 TESTAGENT_AUTO_START=0 可跳过。
 case "${TESTAGENT_AUTO_START:-1}" in
     0 | false | FALSE | no | NO | off | OFF)
