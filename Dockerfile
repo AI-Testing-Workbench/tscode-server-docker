@@ -234,7 +234,6 @@ RUN chmod 0644 /usr/local/lib/tscode/tls-legacy-renegotiation.cjs
 # 配置启动脚本
 COPY start.sh /root/.start.sh
 COPY start-testagent.sh /root/.start-testagent.sh
-COPY gen-external-user.sh /root/.gen-external-user.sh
 COPY custom.sh /root/.custom.sh
 COPY chrome.sh /root/.chrome.sh
 COPY git-clone.sh /root/.git-clone.sh
@@ -244,14 +243,12 @@ COPY git-helpers/runtime-credential-helper /root/.git-helper-temp/runtime-creden
 # 修改启动、自定义操作、clone 和 credential helper 脚本换行符为 Linux LF
 RUN sed -i 's/\r$//' /root/.start.sh \
     && sed -i 's/\r$//' /root/.start-testagent.sh \
-    && sed -i 's/\r$//' /root/.gen-external-user.sh \
     && sed -i 's/\r$//' /root/.custom.sh \
     && sed -i 's/\r$//' /root/.chrome.sh \
     && sed -i 's/\r$//' /root/.git-clone.sh \
     && sed -i 's/\r$//' /root/.git-helper-temp/init-credential-helper \
     && sed -i 's/\r$//' /root/.git-helper-temp/runtime-credential-helper \
     && chmod 0755 /root/.start.sh \
-    && chmod 0755 /root/.gen-external-user.sh \
     && chmod 0755 /root/.chrome.sh \
     && chmod 0755 /root/.git-clone.sh \
     && chmod 0755 /root/.git-helper-temp/init-credential-helper \
