@@ -547,15 +547,71 @@ write_sshd_environment_config() {
     echo "[start] SSHD TESTAGENT 环境配置已生成并通过校验"
 }
 
-if ! write_sshd_environment_config; then
-    exit 1
-fi
-
 # 云端模式下准备外部用户信息；此流程独立于 TestAgent 自动启动开关。
 if [ "${TESTAGENT_CLOUD_MODE:-}" = "1" ] || [ -f /etc/tscode-cloud-mode ]; then
     if ! bash /root/.gen-external-user.sh; then
         echo "[start] 外部用户信息准备失败，继续启动" >&2
     fi
+fi
+
+# 将外部用户文件映射到当前启动进程环境，使后续 TestAgent daemon 和 SSHD 会话都能继承。
+load_external_user_environment() {
+    local user_file=/root/.local/share/testagent/external-user.json
+    local identity_values
+
+    if [[ ! -e "$user_file" && ! -L "$user_file" ]]; then
+        echo "[start] 未找到 external-user.json，跳过身份环境变量加载"
+        return 0
+    fi
+    if [ -L "$user_file" ] || [ ! -f "$user_file" ]; then
+        echo "[start] external-user.json 类型非法，跳过身份环境变量加载" >&2
+        return 1
+    fi
+
+    if ! identity_values=$(python3 - "$user_file" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as source:
+        user = json.load(source)
+    user_id = user.get("userId")
+    token = user.get("token")
+    if not isinstance(user_id, str) or not user_id:
+        raise ValueError("missing user ID")
+    if not isinstance(token, str) or not token:
+        raise ValueError("missing token")
+    if any(ord(character) < 32 or ord(character) == 127 for value in (user_id, token) for character in value):
+        raise ValueError("identity contains control characters")
+    sys.stdout.write(user_id + "\n" + token + "\n")
+except Exception as error:
+    print(f"[start] 无法读取 external-user.json 身份字段（{type(error).__name__}）", file=sys.stderr)
+    sys.exit(1)
+PY
+    ); then
+        return 1
+    fi
+    if [[ "$identity_values" != *$'\n'* ]]; then
+        echo "[start] external-user.json 身份字段格式非法" >&2
+        return 1
+    fi
+
+    TESTAGENT_USER_ID=${identity_values%%$'\n'*}
+    TESTAGENT_USER_TOKEN=${identity_values#*$'\n'}
+    if [ -z "$TESTAGENT_USER_ID" ] || [ -z "$TESTAGENT_USER_TOKEN" ] || [[ "$TESTAGENT_USER_TOKEN" == *$'\n'* ]]; then
+        echo "[start] external-user.json 身份字段格式非法" >&2
+        return 1
+    fi
+    export TESTAGENT_USER_ID TESTAGENT_USER_TOKEN
+    echo "[start] 已从 external-user.json 加载 TestAgent 身份环境变量"
+}
+
+if ! load_external_user_environment; then
+    echo "[start] TestAgent 身份环境变量未加载，继续启动" >&2
+fi
+
+if ! write_sshd_environment_config; then
+    exit 1
 fi
 
 # 默认启动 TestAgent 服务；设置 TESTAGENT_AUTO_START=0 可跳过。
