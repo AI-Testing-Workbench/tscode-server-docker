@@ -625,6 +625,12 @@ case "${TESTAGENT_AUTO_START:-1}" in
         fi
         ;;
 esac
+
+# 将 TestAgent 注册段生成的 CLI 环境导入当前启动进程，供 custom.sh 及其子进程继承。
+if [ -r /etc/profile.d/testagent-env.sh ]; then
+    . /etc/profile.d/testagent-env.sh
+fi
+
 nohup bash /root/.custom.sh > /root/.custom.log 2>&1 </dev/null &
 
 # 启动 SSH 服务
